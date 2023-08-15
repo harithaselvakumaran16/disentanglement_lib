@@ -26,7 +26,7 @@ import scipy.io as sio
 from six.moves import range
 from sklearn.utils import extmath
 #from tensorflow.compat.v1 import gfile
-import os
+
 
 
 CARS3D_PATH = os.path.join(
