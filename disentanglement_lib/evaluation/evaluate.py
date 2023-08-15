@@ -39,10 +39,14 @@ from disentanglement_lib.evaluation.metrics import unified_scores  # pylint: dis
 from disentanglement_lib.evaluation.metrics import unsupervised_metrics  # pylint: disable=unused-import
 from disentanglement_lib.utils import results
 import numpy as np
-import tensorflow.compat.v1 as tf
+#import tensorflow.compat.v1 as tf
+import torch
 import tensorflow_hub as hub
 
-import gin.tf
+#import gin.tf
+import gin.torch
+import shutil
+import importlib
 
 
 def evaluate_with_gin(model_dir,
@@ -93,9 +97,9 @@ def evaluate(model_dir,
     name: Optional string with name of the metric (can be used to name metrics).
   """
   # Delete the output directory if it already exists.
-  if tf.gfile.IsDirectory(output_dir):
+  if os.path.isdir(output_dir):
     if overwrite:
-      tf.gfile.DeleteRecursively(output_dir)
+      shutil.rmtree(output_dir)
     else:
       raise ValueError("Directory already exists and overwrite is False.")
 
