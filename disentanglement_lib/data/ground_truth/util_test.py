@@ -19,6 +19,7 @@ from __future__ import division
 from __future__ import print_function
 # Dependency imports
 from absl.testing import parameterized
+from absl.testing import absltest
 from disentanglement_lib.data.ground_truth import dummy_data
 from disentanglement_lib.data.ground_truth import util
 import numpy as np
@@ -50,4 +51,4 @@ class StateSpaceAtomIndexTest(parameterized.TestCase, torch_testing.TestCase):
 
 
 if __name__ == '__main__':
-  unittest.main()
+  absltest.main()
