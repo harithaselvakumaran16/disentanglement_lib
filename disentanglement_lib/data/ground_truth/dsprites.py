@@ -24,7 +24,6 @@ import numpy as np
 import PIL
 from six.moves import range
 #from tensorflow.compat.v1 import gfile
-import os
 
 DSPRITES_PATH = os.path.join(
     os.environ.get("DISENTANGLEMENT_LIB_DATA", "."), "dsprites",
