@@ -25,7 +25,6 @@ import PIL
 from six.moves import range
 from six.moves import zip
 #import tensorflow.compat.v1 as tf
-import os
 
 SMALLNORB_TEMPLATE = os.path.join(
     os.environ.get("DISENTANGLEMENT_LIB_DATA", "."), "small_norb",
