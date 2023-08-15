@@ -19,21 +19,27 @@ from __future__ import division
 from __future__ import print_function
 import numpy as np
 from six.moves import range
-import tensorflow.compat.v1 as tf
+#import tensorflow.compat.v1 as tf
+import torch
+from torch.utils.data import DataLoader, Dataset
 
+class GroundTruthDataset(Dataset):
+    def __init__(self, ground_truth_data, random_seed):
+        self.ground_truth_data = ground_truth_data
+        self.random_state = np.random.RandomState(random_seed)
 
-def tf_data_set_from_ground_truth_data(ground_truth_data, random_seed):
-  """Generate a tf.data.DataSet from ground_truth data."""
+    def __len__(self):
+        return len(self.ground_truth_data)
 
-  def generator():
-    # We need to hard code the random seed so that the data set can be reset.
-    random_state = np.random.RandomState(random_seed)
-    while True:
-      yield ground_truth_data.sample_observations(1, random_state)[0]
-
-  return tf.data.Dataset.from_generator(
-      generator, tf.float32, output_shapes=ground_truth_data.observation_shape)
-
+    def __getitem__(self, idx):
+        observation = self.ground_truth_data.sample_observations(1, self.random_state)[0]
+        return torch.tensor(observation, dtype=torch.float32)
+      
+  def tf_data_set_from_ground_truth_data(ground_truth_data, random_seed, batch_size=1):
+  """Generate a torch.utils.data.DataLoader from ground_truth data."""
+    dataset = GroundTruthDataset(ground_truth_data, random_seed)
+    dataloader = DataLoader(dataset, batch_size=batch_size)
+    return dataloader
 
 class SplitDiscreteStateSpace(object):
   """State space with factors split between latent variable and observations."""
