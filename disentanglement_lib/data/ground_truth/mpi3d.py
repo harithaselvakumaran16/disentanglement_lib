@@ -24,7 +24,6 @@ from disentanglement_lib.data.ground_truth import ground_truth_data
 from disentanglement_lib.data.ground_truth import util
 import numpy as np
 #import tensorflow.compat.v1 as tf
-import os
 
 class MPI3D(ground_truth_data.GroundTruthData):
   """MPI3D dataset.
