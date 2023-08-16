@@ -21,8 +21,8 @@ from __future__ import print_function
 import math
 import numpy as np
 
-import gin.tf.external_configurables  # pylint: disable=unused-import
-import gin.tf
+import gin.torch.external_configurables  # pylint: disable=unused-import
+import gin.torch
 
 
 def sample_supervised_data(supervised_seed,
