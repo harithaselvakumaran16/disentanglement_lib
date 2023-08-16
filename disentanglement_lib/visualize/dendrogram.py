@@ -25,7 +25,7 @@ import matplotlib.pyplot as plt  # pylint: disable=g-import-not-at-top
 import numpy as np
 import pandas as pd
 from scipy.cluster import hierarchy
-import tensorflow.compat.v1 as tf
+#import tensorflow.compat.v1 as tf
 
 
 def dendrogram_plot(matrix, output_dir, factor_names):
