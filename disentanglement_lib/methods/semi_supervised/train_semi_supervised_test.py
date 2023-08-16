@@ -27,8 +27,9 @@ from disentanglement_lib.methods.semi_supervised import semi_supervised_utils  #
 from disentanglement_lib.methods.semi_supervised import semi_supervised_vae  # pylint: disable=unused-import
 from disentanglement_lib.methods.semi_supervised import train_semi_supervised_lib
 from disentanglement_lib.utils import resources
-import tensorflow.compat.v1 as tf
-import gin.tf
+#import tensorflow.compat.v1 as tf
+import gin.torch
+import unittest
 
 ANNEAL_LOSS_LIST = [
     [
@@ -243,4 +244,4 @@ class VAETrainTest(parameterized.TestCase):
 
 
 if __name__ == "__main__":
-  tf.test.main()
+  unittest.main()
