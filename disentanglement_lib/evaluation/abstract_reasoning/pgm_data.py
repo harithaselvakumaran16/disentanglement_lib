@@ -32,7 +32,8 @@ from disentanglement_lib.visualize import visualize_util
 import gin
 import numpy as np
 from PIL import Image
-import tensorflow.compat.v1 as tf
+import torch
+from torch.utils.data import Dataset, DataLoader
 
 
 @gin.configurable("pgm")
@@ -137,48 +138,43 @@ class PGMDataset(object):
         np.array(solution), alternatives, position, pgm.matrix,
         pgm.other_solutions, self.ground_truth_data.factors_num_values)
 
-  def tf_data_set(self, seed):
-    """Returns a tf.data.Dataset.
+  class CustomDataset(Dataset):
+    def __init__(self, seed):
+        self.seed = seed
 
-    Args:
-      seed: Integer with the random seed used to initialize the data set.
+    def __len__(self):
+        # Return the length of the dataset
+        return None  # Specify the actual length
 
-    Returns.
-      tf.data.Dataset of the data set.
-    """
-
-    def generator():
-      # We need to hard code the random seed so that the data set can be reset.
-      random_state = np.random.RandomState(seed)
-      while True:
+    def __getitem__(self, idx):
+        # Implement the logic to retrieve a sample
+        random_state = np.random.RandomState(self.seed)
         instance = self.sample(random_state)
-        yield instance.training_sample()
+        return instance.training_sample()
 
-    # We sample a single example to obtain the actual shapes and dtypes.
-    features, _ = self.sample(np.random.RandomState(0)).training_sample()
-    features_shapes = {k: v.shape for k, v in features.items()}
-    features_types = {k: v.dtype for k, v in features.items()}
-    output_shapes = (features_shapes, tf.TensorShape([]))
-    output_types = (features_types, tf.int64)
-
-    return tf.data.Dataset.from_generator(
-        generator, output_types=output_types, output_shapes=output_shapes)
-
+  def tf_data_set(seed, batch_size, shuffle=True):
+    dataset = CustomDataset(seed)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
+    return dataloader
+    
   def make_input_fn(self, seed, num_batches=None):
     """Creates an input function for the TPU Estimator."""
 
-    def input_fn(params):
+  def input_fn(params):
       """TPUEstimator compatible input fuction."""
-      dataset = self.tf_data_set(seed)
-      batch_size = params["batch_size"]
+    batch_size = params["batch_size"]
+    dataset = self.tf_data_set(seed, batch_size)
       # We need to drop the remainder as otherwise we lose the batch size in the
       # tensor shape. This has no effect as our data set is infinite.
-      dataset = dataset.batch(batch_size, drop_remainder=True)
-      if num_batches is not None:
-        dataset = dataset.take(num_batches)
-      return dataset.make_one_shot_iterator().get_next()
+    if num_batches is not None:
+    dataloader = DataLoader(dataloader.dataset, batch_size=batch_size, num_workers=0)
+    
+    def generator():
+      for batch in dataloader:
+        yield batch
 
-    return input_fn
+    return generator
+
 
 
 class PGMInstance(object):
@@ -410,7 +406,7 @@ def question_mark():
   """Returns an image of the question mark."""
   # Cache the image so it is not always reloaded.
   if QUESTION_MARK[0] is None:
-    with tf.gfile.Open(
+    with open(
         resources.get_file("google/abstract_reasoning/data/question_mark.png"),
         "rb") as f:
       QUESTION_MARK[0] = np.array(Image.open(f).convert("RGB")) * 1.0 / 255.
