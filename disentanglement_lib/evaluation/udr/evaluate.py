@@ -26,15 +26,17 @@ from __future__ import print_function
 import contextlib
 import os
 import time
+import shutil
 
 from absl import flags
 from disentanglement_lib.data.ground_truth import named_data
 from disentanglement_lib.evaluation.udr.metrics import udr  # pylint: disable=unused-import
 from disentanglement_lib.utils import results
 import numpy as np
-import tensorflow.compat.v1 as tf
-import tensorflow_hub as hub
-import gin.tf
+#import tensorflow.compat.v1 as tf
+#import tensorflow_hub as hub
+import gin.torch
+import torch
 
 FLAGS = flags.FLAGS
 
@@ -65,18 +67,19 @@ def evaluate(model_dirs,
                          gin_dict["dataset.name"].replace("'", ""))
 
   output_dir = os.path.join(output_dir)
-  if tf.io.gfile.isdir(output_dir):
-    tf.io.gfile.rmtree(output_dir)
+  if os.path.isdir(output_dir):
+    shutil.rmtree(output_dir)
 
   dataset = named_data.get_named_ground_truth_data()
 
   with contextlib.ExitStack() as stack:
     representation_functions = []
-    eval_functions = [
-        stack.enter_context(
-            hub.eval_function_for_module(os.path.join(model_dir, "tfhub")))
-        for model_dir in model_dirs
-    ]
+    eval_functions = []
+    with torch.no_grad():
+    for model_dir in model_dirs:
+        model = torch.hub.load(model_dir, 'default', source='local')  # Replace with actual model loading method
+        eval_functions.append(model.eval())
+    
     for f in eval_functions:
 
       def _representation_function(x, f=f):
