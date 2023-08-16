@@ -31,7 +31,10 @@ import numpy as np
 from six.moves import zip
 import tensorflow.compat.v1 as tf
 
-import gin.tf
+import gin.torch
+import torch
+from torch.optim.lr_scheduler import StepLR
+from torch.utils.tensorboard import SummaryWriter
 from tensorflow_estimator.python.estimator.tpu.tpu_estimator import TPUEstimatorSpec
 
 
@@ -55,11 +58,11 @@ class BaseS2VAE(vae.BaseVAE):
       TPU estimator.
     """
 
-    is_training = (mode == tf.estimator.ModeKeys.TRAIN)
+    is_training = (mode == "train")
     labelled_features = labels[0]
-    labels = tf.to_float(labels[1])
+    labels = labels[1].float()
     data_shape = features.get_shape().as_list()[1:]
-    with tf.variable_scope(tf.get_variable_scope(), reuse=tf.AUTO_REUSE):
+    with torch.no_grad()::
       z_mean, z_logvar = self.gaussian_encoder(
           features, is_training=is_training)
       z_mean_labelled, _ = self.gaussian_encoder(
@@ -67,64 +70,57 @@ class BaseS2VAE(vae.BaseVAE):
     z_sampled = self.sample_from_latent_distribution(z_mean, z_logvar)
     reconstructions = self.decode(z_sampled, data_shape, is_training)
     per_sample_loss = losses.make_reconstruction_loss(features, reconstructions)
-    reconstruction_loss = tf.reduce_mean(per_sample_loss)
+    reconstruction_loss = per_sample_loss.mean()
     kl_loss = compute_gaussian_kl(z_mean, z_logvar)
-    gamma_annealed = make_annealer(self.gamma_sup, tf.train.get_global_step())
+    gamma_annealed = StepLR(optimizer, step_size=train.get_global_step(), gamma=self.gamma_sup)
     supervised_loss = make_supervised_loss(z_mean_labelled, labels,
                                            self.factor_sizes)
     regularizer = self.unsupervised_regularizer(
         kl_loss, z_mean, z_logvar, z_sampled) + gamma_annealed * supervised_loss
-    loss = tf.add(reconstruction_loss, regularizer, name="loss")
-    elbo = tf.add(reconstruction_loss, kl_loss, name="elbo")
-    if mode == tf.estimator.ModeKeys.TRAIN:
+    loss = reconstruction_loss+ regularizer
+    elbo = reconstruction_loss+ kl_loss
+     if mode == "train":
       optimizer = optimizers.make_vae_optimizer()
-      update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+      update_ops = []
       train_op = optimizer.minimize(
-          loss=loss, global_step=tf.train.get_global_step())
-      train_op = tf.group([train_op, update_ops])
-      tf.summary.scalar("reconstruction_loss", reconstruction_loss)
-      tf.summary.scalar("elbo", -elbo)
+          loss=loss)
+      train_op = torch.optim.optimizer.step([train_op, *update_ops])
+      writer = SummaryWriter()  # Initialize a summary writer for logging
+      writer.add_scalar("reconstruction_loss", reconstruction_loss.item())
 
-      logging_hook = tf.train.LoggingTensorHook({
-          "loss": loss,
-          "reconstruction_loss": reconstruction_loss,
-          "elbo": -elbo,
-          "supervised_loss": supervised_loss
-      },
-                                                every_n_iter=100)
+    for step in range(num_steps):
+      
+      if step % 100 == 0:
+        writer.add_scalar("loss", loss.item(), step)
+        writer.add_scalar("reconstruction_loss", reconstruction_loss.item(), step)
+        writer.add_scalar("supervised_loss", supervised_loss.item(), step)
       return TPUEstimatorSpec(
           mode=mode,
           loss=loss,
           train_op=train_op,
           training_hooks=[logging_hook])
-    elif mode == tf.estimator.ModeKeys.EVAL:
+    elif mode == "eval":
       return TPUEstimatorSpec(
           mode=mode,
           loss=loss,
-          eval_metrics=(make_metric_fn("reconstruction_loss", "elbo",
-                                       "regularizer", "kl_loss",
-                                       "supervised_loss"), [
-                                           reconstruction_loss, -elbo,
-                                           regularizer, kl_loss, supervised_loss
-                                       ]))
+          eval_metrics=(make_metric_fn("reconstruction_loss", "regularizer",
+                                       "supervised_loss"),
+                        [reconstruction_loss, regularizer, supervised_loss]))
     else:
       raise NotImplementedError("Eval mode not supported.")
 
 
 def sample_from_latent_distribution(z_mean, z_logvar):
   """Sample from the encoder distribution with reparametrization trick."""
-  return tf.add(
-      z_mean,
-      tf.exp(z_logvar / 2) * tf.random_normal(tf.shape(z_mean), 0, 1),
-      name="latent")
+  std = torch.exp(0.5 * z_logvar)
+  eps = torch.randn_like(std)
+  return z_mean + eps * std
 
 
 def compute_gaussian_kl(z_mean, z_logvar):
   """Compute KL divergence between input Gaussian and Standard Normal."""
-  return tf.reduce_mean(
-      0.5 * tf.reduce_sum(
-          tf.square(z_mean) + tf.exp(z_logvar) - z_logvar - 1, [1]),
-      name="kl_loss")
+  kl_loss = 0.5 * torch.sum(torch.square(z_mean) + torch.exp(z_logvar) - z_logvar - 1, dim=1)
+  return torch.mean(kl_loss)
 
 
 def make_metric_fn(*names):
@@ -155,8 +151,9 @@ def fixed_annealer(gamma, step, iteration_threshold):
 @gin.configurable("anneal", blacklist=["gamma", "step"])
 def annealed_annealer(gamma, step, iteration_threshold):
   """Linear annealing."""
-  return tf.math.minimum(gamma * 1.,
-                         gamma * 1. * tf.to_float(step) / iteration_threshold)
+  iteration_threshold = 10000  # You can adjust this value as needed
+    return torch.min(gamma * 1., gamma * 1. * torch.tensor(step) / iteration_threshold)
+
 
 
 @gin.configurable("fine_tune", blacklist=["gamma", "step"])
@@ -173,9 +170,9 @@ def fine_tune_annealer(gamma, step, iteration_threshold):
   Returns:
     Either gamma or zero.
   """
-  return gamma * tf.math.minimum(
-      tf.to_float(1),
-      tf.math.maximum(tf.to_float(0), tf.to_float(step - iteration_threshold)))
+  return gamma * torch.min(
+        torch.tensor(1.0, dtype=torch.float32),
+        torch.max(torch.tensor(0.0, dtype=torch.float32), torch.tensor(step - iteration_threshold, dtype=torch.float32)))
 
 
 @gin.configurable("supervised_loss", blacklist=["representation", "labels"])
@@ -231,15 +228,14 @@ def supervised_regularizer_l2(representation, labels,
   number_factors_of_variations = labels.shape[1].value
   assert number_latents >= number_factors_of_variations, "Not enough latents."
   if learn_scale:
-    b = tf.get_variable("b", initializer=tf.constant(1.))
-    return 2. * tf.nn.l2_loss(
-        representation[:, :number_factors_of_variations] * b - labels)
+    b = nn.Parameter(torch.Tensor([1.]))
+        return 2. * torch.nn.functional.mse_loss(
+            representation[:, :number_factors_of_variations] * b - labels, torch.zeros_like(labels))
   else:
-    return 2. * tf.nn.l2_loss(
-        tf.sigmoid(
-            tf.expand_dims(
-                representation[:, :number_factors_of_variations], axis=1)) -
-        normalize_labels(labels, factor_sizes))
+    normalized_labels = normalize_labels(labels, factor_sizes)
+    sigmoid_input = representation[:, :number_factors_of_variations].unsqueeze(1)
+    sigmoid_output = torch.sigmoid(sigmoid_input)
+    return 2. * torch.nn.functional.mse_loss(sigmoid_output, normalized_labels)
 
 
 @gin.configurable("xent", blacklist=["representation", "labels"])
@@ -260,13 +256,13 @@ def supervised_regularizer_xent(representation, labels,
   Returns:
     Xent loss between the representation and the labels.
   """
-  number_latents = representation.shape[1].value
-  number_factors_of_variations = labels.shape[1].value
+  number_latents = representation.size[1]
+  number_factors_of_variations = labels.size[1]
   assert number_latents >= number_factors_of_variations, "Not enough latents."
-  return tf.reduce_sum(
-      tf.nn.sigmoid_cross_entropy_with_logits(
-          logits=representation[:, :number_factors_of_variations],
-          labels=normalize_labels(labels, factor_sizes)))
+  logits = representation[:, :number_factors_of_variations]
+  normalized_labels = normalize_labels(labels, factor_sizes)
+  loss = F.binary_cross_entropy_with_logits(logits, normalized_labels, reduction='sum')
+  return loss
 
 
 @gin.configurable("cov", blacklist=["representation", "labels"])
@@ -292,17 +288,18 @@ def supervised_regularizer_cov(representation, labels,
   del factor_sizes
   number_latents = representation.shape[1].value
   number_factors_of_variations = labels.shape[1].value
-  num_diagonals = tf.math.minimum(number_latents, number_factors_of_variations)
-  expectation_representation = tf.reduce_mean(representation, axis=0)
-  expectation_labels = tf.reduce_mean(labels, axis=0)
+  num_diagonals = torch.min(number_latents, number_factors_of_variations)
+  expectation_representation = torch.mean(representation, axis=0)
+  expectation_labels = torch.mean(labels, axis=0)
   representation_centered = representation - expectation_representation
   labels_centered = labels - expectation_labels
-  covariance = tf.reduce_mean(
-      tf.expand_dims(representation_centered, 2) * tf.expand_dims(
-          labels_centered, 1),
-      axis=0)
-  return 2. * tf.nn.l2_loss(
-      tf.linalg.set_diag(covariance, tf.zeros([num_diagonals])))
+  covariance = torch.mean(
+    representation_centered.unsqueeze(2) * labels_centered.unsqueeze(1),
+    dim=0)
+    num_diagonals = covariance.size(0)
+  l2_loss = torch.norm(torch.diag(covariance, 0), p=2)
+  return 2. * l2_loss
+
 
 
 @gin.configurable("embed", blacklist=["representation", "labels",
@@ -338,24 +335,27 @@ def supervised_regularizer_embed(representation, labels,
   supervised_representation = representation[:, :number_factors_of_variations]
   loss = []
   for i in range(number_factors_of_variations):
-    with tf.variable_scope(str(i), reuse=tf.AUTO_REUSE):
+    with torch.no_grad():
       if use_order:
-        bias = tf.get_variable("bias", [])
-        slope = tf.get_variable("slope", [])
-        embedding = tf.range(factor_sizes[i], dtype=tf.float32)*slope + bias
+        bias = torch.nn.Parameter(torch.zeros([]))
+        slope = torch.nn.Parameter(torch.zeros([]))
+        embedding = torch.arange(factor_sizes[i], dtype=torch.float32) * slope + bias
       else:
-        embedding = tf.get_variable("embedding", [factor_sizes[i]])
+        embedding = torch.nn.Parameter(torch.zeros(factor_sizes[i]))
       if sigma == "learn":
-        sigma_value = tf.get_variable("sigma", [1])
+        sigma_value = torch.nn.Parameter(torch.ones([1]))
       else:
         sigma_value = sigma
-    logits = -tf.square(
-        (tf.expand_dims(supervised_representation[:, i], axis=1) - embedding) *
-        sigma_value)
-    one_hot_labels = tf.one_hot(tf.to_int32(labels[:, i]), factor_sizes[i])
-    loss += [tf.losses.softmax_cross_entropy(one_hot_labels, logits)]
-  return tf.reduce_sum(tf.add_n(loss))
+    logits = -torch.square(
+        (supervised_representation[:, i].unsqueeze(1) - embedding) * sigma_value)
 
+    one_hot_labels = torch.nn.functional.one_hot(
+        labels[:, i].to(torch.int64), num_classes=factor_sizes[i])
+
+    loss.append(torch.nn.functional.cross_entropy(logits, one_hot_labels))
+
+  loss = torch.sum(torch.stack(loss))
+  return loss
 
 @gin.configurable("s2_vae")
 class S2BetaVAE(BaseS2VAE):
@@ -404,44 +404,45 @@ class SupervisedVAE(BaseS2VAE):
       TPU Estimator.
     """
 
-    is_training = (mode == tf.estimator.ModeKeys.TRAIN)
+    is_training = (mode == "train")
     labelled_features = labels[0]
-    labels = tf.to_float(labels[1])
+    labels = labels[1].float()
     data_shape = features.get_shape().as_list()[1:]
-    with tf.variable_scope(tf.get_variable_scope(), reuse=tf.AUTO_REUSE):
+    with torch.no_grad():
       z_mean, z_logvar = self.gaussian_encoder(
           features, is_training=is_training)
       z_mean_labelled, _ = self.gaussian_encoder(
           labelled_features, is_training=is_training)
     z_sampled = self.sample_from_latent_distribution(z_mean, z_logvar)
-    reconstructions = self.decode(
-        tf.stop_gradient(z_sampled), data_shape, is_training)
+reconstructions = self.decode(
+    z_sampled.detach(), data_shape, is_training)
     per_sample_loss = losses.make_reconstruction_loss(features, reconstructions)
-    reconstruction_loss = tf.reduce_mean(per_sample_loss)
+    reconstruction_loss = torch.mean(per_sample_loss)
     supervised_loss = make_supervised_loss(z_mean_labelled, labels,
                                            self.factor_sizes)
     regularizer = supervised_loss
-    loss = tf.add(reconstruction_loss, regularizer, name="loss")
-    if mode == tf.estimator.ModeKeys.TRAIN:
+    loss = torch.add(reconstruction_loss, regularizer, name="loss")
+    if mode == "train":
       optimizer = optimizers.make_vae_optimizer()
-      update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+      update_ops = []
       train_op = optimizer.minimize(
-          loss=loss, global_step=tf.train.get_global_step())
-      train_op = tf.group([train_op, update_ops])
-      tf.summary.scalar("reconstruction_loss", reconstruction_loss)
+          loss=loss)
+      train_op = torch.optim.optimizer.step([train_op, *update_ops])
+      writer = SummaryWriter()  # Initialize a summary writer for logging
+      writer.add_scalar("reconstruction_loss", reconstruction_loss.item())
 
-      logging_hook = tf.train.LoggingTensorHook({
-          "loss": loss,
-          "reconstruction_loss": reconstruction_loss,
-          "supervised_loss": supervised_loss
-      },
-                                                every_n_iter=100)
+    for step in range(num_steps):
+      
+      if step % 100 == 0:
+        writer.add_scalar("loss", loss.item(), step)
+        writer.add_scalar("reconstruction_loss", reconstruction_loss.item(), step)
+        writer.add_scalar("supervised_loss", supervised_loss.item(), step)
       return TPUEstimatorSpec(
           mode=mode,
           loss=loss,
           train_op=train_op,
           training_hooks=[logging_hook])
-    elif mode == tf.estimator.ModeKeys.EVAL:
+    elif mode == "eval":
       return TPUEstimatorSpec(
           mode=mode,
           loss=loss,
@@ -471,23 +472,33 @@ def mine(x, z, name_net="estimator_network"):
   concat_x_x = tf.concat([x, x], axis=0)
   concat_z_z_shuffled = tf.stop_gradient(tf.concat([z, z_shuffled], axis=0))
 
-  with tf.variable_scope(name_net, reuse=tf.AUTO_REUSE):
-    d1_x = tf.layers.dense(concat_x_x, 20, name="d1_x")
-    d1_z = tf.layers.dense(concat_z_z_shuffled, 20, name="d1_z")
-    d1 = tf.nn.elu(d1_x + d1_z, name="d1")
-    d2 = tf.layers.dense(d1, 1, name="d2")
+  with torch.no_grad():
+    d1_x = nn.Linear(concat_x_x.size(1), 20)(concat_x_x)
+    d1_z = nn.Linear(concat_z_z_shuffled.size(1), 20)(concat_z_z_shuffled)
+    d1 = torch.nn.functional.elu(d1_x + d1_z)
+    d2 = nn.Linear(d1.size(1), 1)(d1)
 
   batch_size = tf.shape(x)[0]
   pred_x_z = d2[:batch_size]
   pred_x_z_shuffled = d2[batch_size:]
+  batch_size = x.size(0)
+  pred_x_z = d2[:batch_size]
+  pred_x_z_shuffled = d2[batch_size:]
   loss = -(
-      tf.reduce_mean(pred_x_z, axis=0) + tf.math.log(tf.to_float(batch_size)) -
-      tf.math.reduce_logsumexp(pred_x_z_shuffled))
-  all_variables = tf.trainable_variables()
-  mine_vars = [var for var in all_variables if "estimator_network" in var.name]
-  mine_op = tf.train.AdamOptimizer(learning_rate=0.01).minimize(
-      loss=loss, var_list=mine_vars)
-  return -loss, mine_op
+    torch.mean(pred_x_z) + torch.log(torch.tensor(batch_size, dtype=torch.float32)) -
+    torch.logsumexp(pred_x_z_shuffled, dim=0)
+)
+
+all_variables = []
+for name, param in model.named_parameters():
+    if "estimator_network" in name:
+        all_variables.append(param)
+mine_op = optim.Adam(all_variables, lr=0.01)
+mine_op.zero_grad()
+loss.backward()
+mine_op.step()
+
+return -loss.item(), mine_op
 
 
 @gin.configurable("s2_mine_vae")
@@ -512,9 +523,9 @@ class MineVAE(BaseS2VAE):
     """TPUEstimator compatible model function."""
     is_training = (mode == tf.estimator.ModeKeys.TRAIN)
     labelled_features = labels[0]
-    labels = tf.to_float(labels[1])
+    labels = labels[1].float()
     data_shape = features.get_shape().as_list()[1:]
-    with tf.variable_scope(tf.get_variable_scope(), reuse=tf.AUTO_REUSE):
+    with torch.no_grad():
       z_mean, z_logvar = self.gaussian_encoder(
           features, is_training=is_training)
       z_mean_labelled, _ = self.gaussian_encoder(
@@ -525,58 +536,49 @@ class MineVAE(BaseS2VAE):
 
     for l in range(labels.get_shape().as_list()[1]):
       for r in range(z_mean.get_shape().as_list()[1]):
-        label_for_mi = tf.layers.flatten(labels[:, l])
-        representation_for_mi = tf.layers.flatten(z_mean_labelled[:, r])
+        label_for_mi = labels[:, l].flatten()
+        representation_for_mi = z_mean_labelled[:, r].flatten()
         mi_lr, op_lr = mine(representation_for_mi, label_for_mi,
                             "estimator_network_%d_%d" % (l, r))
         if l != r:
           supervised_loss = supervised_loss + [tf.math.square(mi_lr)]
         mine_ops = mine_ops + [op_lr]
-    supervised_loss = tf.reshape(tf.add_n(supervised_loss), [])
+    supervised_loss = torch.sum(torch.stack(supervised_loss))
     z_sampled = self.sample_from_latent_distribution(z_mean, z_logvar)
     reconstructions = self.decode(z_sampled, data_shape, is_training)
     per_sample_loss = losses.make_reconstruction_loss(features, reconstructions)
-    reconstruction_loss = tf.reduce_mean(per_sample_loss)
+    reconstruction_loss = torch.mean(per_sample_loss)
     kl_loss = compute_gaussian_kl(z_mean, z_logvar)
-    standard_vae_loss = tf.add(
+    standard_vae_loss = torch.add(
         reconstruction_loss, self.beta * kl_loss, name="VAE_loss")
-    gamma_annealed = make_annealer(self.gamma_sup, tf.train.get_global_step())
-    s2_mine_vae_loss = tf.add(
+    gamma_annealed = make_annealer(self.gamma_sup, global_step())
+    s2_mine_vae_loss = torch.add(
         standard_vae_loss, gamma_annealed * supervised_loss,
         name="s2_factor_VAE_loss")
-    if mode == tf.estimator.ModeKeys.TRAIN:
-      optimizer_vae = optimizers.make_vae_optimizer()
-      all_variables = tf.trainable_variables()
-      encoder_vars = [var for var in all_variables if "encoder" in var.name]
-      decoder_vars = [var for var in all_variables if "decoder" in var.name]
+    if mode == "train":
+    optimizer = optimizers.make_vae_optimizer()
+    update_ops = []  # In PyTorch, update ops are not explicitly needed
+    train_op = optimizer.minimize(loss=loss)
+    train_op = torch.optim.optimizer.step([train_op, *update_ops])
+    writer = SummaryWriter()  # Initialize a summary writer for logging
+    writer.add_scalar("reconstruction_loss", reconstruction_loss.item())
 
-      update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
-      train_op_vae = optimizer_vae.minimize(
-          loss=s2_mine_vae_loss,
-          global_step=tf.train.get_global_step(),
-          var_list=encoder_vars + decoder_vars)
-      train_op = tf.group(train_op_vae, mine_ops, update_ops)
-      tf.summary.scalar("reconstruction_loss", reconstruction_loss)
-      logging_hook = tf.train.LoggingTensorHook({
-          "loss": s2_mine_vae_loss,
-          "reconstruction_loss": reconstruction_loss,
-          "supervised_loss": supervised_loss,
-      },
-                                                every_n_iter=50)
-      return TPUEstimatorSpec(
-          mode=mode,
-          loss=s2_mine_vae_loss,
-          train_op=train_op,
-          training_hooks=[logging_hook])
-    elif mode == tf.estimator.ModeKeys.EVAL:
-      return TPUEstimatorSpec(
-          mode=mode,
-          loss=s2_mine_vae_loss,
-          eval_metrics=(make_metric_fn("reconstruction_loss", "supervised_loss",
-                                       "kl_loss"),
-                        [reconstruction_loss, supervised_loss, kl_loss]))
-    else:
-      raise NotImplementedError("Eval mode not supported.")
+    logging_hook = ...  # PyTorch does not have an equivalent LoggingTensorHook
+    return TPUEstimatorSpec(
+        mode=mode,
+        loss=loss,
+        train_op=train_op,
+        training_hooks=[logging_hook])
+elif mode == tf.estimator.ModeKeys.EVAL:
+    return TPUEstimatorSpec(
+        mode=mode,
+        loss=loss,
+        eval_metrics=(make_metric_fn("reconstruction_loss", "regularizer",
+                                     "supervised_loss"),
+                      [reconstruction_loss, regularizer, supervised_loss]))
+else:
+    raise NotImplementedError('Eval mode not supported')
+
 
 
 @gin.configurable("s2_factor_vae")
@@ -600,51 +602,51 @@ class S2FactorVAE(BaseS2VAE):
 
   def model_fn(self, features, labels, mode, params):
     """TPUEstimator compatible model function."""
-    is_training = (mode == tf.estimator.ModeKeys.TRAIN)
+    is_training = (mode == "train")
     labelled_features = labels[0]
-    labels = tf.to_float(labels[1])
+    labels = labels[1].float()
     data_shape = features.get_shape().as_list()[1:]
-    with tf.variable_scope(tf.get_variable_scope(), reuse=tf.AUTO_REUSE):
+    with torch.no_grad():
       z_mean, z_logvar = self.gaussian_encoder(
           features, is_training=is_training)
       z_mean_labelled, _ = self.gaussian_encoder(
           labelled_features, is_training=is_training)
     z_sampled = self.sample_from_latent_distribution(z_mean, z_logvar)
     z_shuffle = vae.shuffle_codes(z_sampled)
-    with tf.variable_scope(tf.get_variable_scope(), reuse=tf.AUTO_REUSE):
+    with torch.no_grad():
       logits_z, probs_z = architectures.make_discriminator(
           z_sampled, is_training=is_training)
       _, probs_z_shuffle = architectures.make_discriminator(
           z_shuffle, is_training=is_training)
     reconstructions = self.decode(z_sampled, data_shape, is_training)
     per_sample_loss = losses.make_reconstruction_loss(features, reconstructions)
-    reconstruction_loss = tf.reduce_mean(per_sample_loss)
+    reconstruction_loss = torch.mean(per_sample_loss)
     kl_loss = compute_gaussian_kl(z_mean, z_logvar)
-    standard_vae_loss = tf.add(reconstruction_loss, kl_loss, name="VAE_loss")
+    standard_vae_loss = torch.add(reconstruction_loss, kl_loss, name="VAE_loss")
     # tc = E[log(p_real)-log(p_fake)] = E[logit_real - logit_fake]
     tc_loss_per_sample = logits_z[:, 0] - logits_z[:, 1]
-    tc_loss = tf.reduce_mean(tc_loss_per_sample, axis=0)
+    tc_loss = torch.mean(tc_loss_per_sample, axis=0)
     regularizer = kl_loss + self.gamma * tc_loss
-    gamma_annealed = make_annealer(self.gamma_sup, tf.train.get_global_step())
+    gamma_annealed = make_annealer(self.gamma_sup,self.global_step())
     supervised_loss = make_supervised_loss(z_mean_labelled, labels,
                                            self.factor_sizes)
-    s2_factor_vae_loss = tf.add(
+    s2_factor_vae_loss = torch.add(
         standard_vae_loss,
         self.gamma * tc_loss + gamma_annealed * supervised_loss,
         name="s2_factor_VAE_loss")
-    discr_loss = tf.add(
-        0.5 * tf.reduce_mean(tf.log(probs_z[:, 0])),
-        0.5 * tf.reduce_mean(tf.log(probs_z_shuffle[:, 1])),
+    discr_loss = torch.add(
+        0.5 * torch.mean(tf.log(probs_z[:, 0])),
+        0.5 * torch.mean(tf.log(probs_z_shuffle[:, 1])),
         name="discriminator_loss")
-    if mode == tf.estimator.ModeKeys.TRAIN:
+    if mode == "train":
       optimizer_vae = optimizers.make_vae_optimizer()
       optimizer_discriminator = optimizers.make_discriminator_optimizer()
-      all_variables = tf.trainable_variables()
+      all_variables = []
       encoder_vars = [var for var in all_variables if "encoder" in var.name]
       decoder_vars = [var for var in all_variables if "decoder" in var.name]
       discriminator_vars = [var for var in all_variables \
                             if "discriminator" in var.name]
-      update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+      update_ops = []
       train_op_vae = optimizer_vae.minimize(
           loss=s2_factor_vae_loss,
           global_step=tf.train.get_global_step(),
@@ -653,29 +655,38 @@ class S2FactorVAE(BaseS2VAE):
           loss=-discr_loss,
           global_step=tf.train.get_global_step(),
           var_list=discriminator_vars)
-      train_op = tf.group(train_op_vae, train_op_discr, update_ops)
-      tf.summary.scalar("reconstruction_loss", reconstruction_loss)
-      logging_hook = tf.train.LoggingTensorHook({
-          "loss": s2_factor_vae_loss,
-          "reconstruction_loss": reconstruction_loss
-      },
-                                                every_n_iter=50)
-      return TPUEstimatorSpec(
-          mode=mode,
-          loss=s2_factor_vae_loss,
-          train_op=train_op,
-          training_hooks=[logging_hook])
-    elif mode == tf.estimator.ModeKeys.EVAL:
-      return TPUEstimatorSpec(
-          mode=mode,
-          loss=s2_factor_vae_loss,
-          eval_metrics=(make_metric_fn("reconstruction_loss", "regularizer",
-                                       "kl_loss", "supervised_loss"), [
-                                           reconstruction_loss, regularizer,
-                                           kl_loss, supervised_loss
-                                       ]))
-    else:
-      raise NotImplementedError("Eval mode not supported.")
+      train_op = torch.optim.Optimizer([train_op_vae, train_op_discr])
+      torch_summary.scalar("reconstruction_loss", reconstruction_loss)
+
+      class LoggingHook:
+        def __init__(self):
+          self.iteration = 0
+
+        def __call__(self, loss):
+          if self.iteration % 50 == 0:
+            print(f"Iteration {self.iteration}, loss: {loss:.4f}")
+          self.iteration += 1
+
+      logging_hook = LoggingHook()
+
+      if mode == "train":
+        return TPUEstimatorSpec(
+        mode=mode,
+        loss=s2_factor_vae_loss,
+        train_op=train_op,
+        training_hooks=[logging_hook])
+      elif mode == "eval":
+        return TPUEstimatorSpec(
+        mode=mode,
+        loss=s2_factor_vae_loss,
+        eval_metrics=(make_metric_fn("reconstruction_loss", "regularizer",
+                                     "kl_loss", "supervised_loss"), [
+                                         reconstruction_loss, regularizer,
+                                         kl_loss, supervised_loss
+                                     ]))
+      else:
+        raise NotImplementedError("Eval mode not supported.")
+
 
 
 @gin.configurable("s2_dip_vae")
@@ -717,8 +728,8 @@ class S2DIPVAE(BaseS2VAE):
       cov_dip_regularizer = vae.regularize_diag_off_diag_dip(
           cov_z_mean, self.lambda_od, lambda_d)
     elif self.dip_type == "ii":
-      cov_enc = tf.matrix_diag(tf.exp(z_logvar))
-      expectation_cov_enc = tf.reduce_mean(cov_enc, axis=0)
+      cov_enc = torch.diag_embed(torch.exp(z_logvar))
+      expectation_cov_enc = torch.mean(cov_enc, axis=0)
       cov_z = expectation_cov_enc + cov_z_mean
       cov_dip_regularizer = vae.regularize_diag_off_diag_dip(
           cov_z, self.lambda_od, lambda_d)
