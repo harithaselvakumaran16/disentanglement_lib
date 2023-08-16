@@ -20,11 +20,15 @@ from __future__ import print_function
 import os
 from disentanglement_lib.utils import convolute_hub
 import numpy as np
-import tensorflow.compat.v1 as tf
-import tensorflow_hub as hub
+#import tensorflow.compat.v1 as tf
+#import tensorflow_hub as hub
+import torch
+import torch.nn as nn
+from torch.testing import torch_testing
+from absl.testing import absltest
 
 
-class ConvoluteHubTest(tf.test.TestCase):
+class ConvoluteHubTest(torch_testing.TestCase):
 
   def test_convolute(self):
 
@@ -42,20 +46,20 @@ class ConvoluteHubTest(tf.test.TestCase):
     # Save a TFHub module that we will convolute.
     module_path = os.path.join(self.get_temp_dir(), "module_path")
     def module_fn():
-      tensor = tf.placeholder(tf.float64, shape=(None, 10))
-      variable1 = tf.get_variable("variable1", shape=(10, 6), dtype=tf.float64)
-      output = tf.matmul(tensor, variable1)
-      hub.add_signature(
+      tensor = torch.tensor(dtype=torch.float64, shape = (None,10))
+      variable1 = nn.Parameter(torch.randn(10, 6, dtype=torch.float64))
+      output = torch.matmul(tensor, variable1)
+      torch.hub.add_signature(
           name="multiplication1",
           inputs={"tensor": tensor},
           outputs={"tensor": output})
-    spec = hub.create_module_spec(module_fn)
-    spec.export(module_path, checkpoint_path=checkpoint_path)
+    spec = torch.hub.create_module_spec(module_fn)
+    torch.jit.save(spec, module_path))
 
     # Function used for the convolution.
     def _operation2(tensor):
-      variable2 = tf.get_variable("variable2", shape=(6, 2), dtype=tf.float64)
-      return dict(tensor=tf.matmul(tensor, variable2))
+      variable2 = torch.empty((6, 2), dtype=torch.float64)
+      return dict(tensor=torch.matmul(tensor, variable2))
 
     # Save the convolution as a new TFHub module
     module_path_new = os.path.join(self.get_temp_dir(), "module_path_new")
@@ -64,11 +68,11 @@ class ConvoluteHubTest(tf.test.TestCase):
                                      checkpoint_path, "convoluted")
 
     # Check the first signature.
-    with hub.eval_function_for_module(module_path_new) as f:
+    with torch.hub.eval_function_for_module(module_path_new) as f:
       module_result = f(dict(tensor=data), signature="convoluted", as_dict=True)
     real_result = data.dot(variable1).dot(variable2)
     self.assertAllClose(real_result, module_result["tensor"])
 
 
 if __name__ == "__main__":
-  tf.test.main()
+  absltest.main()
