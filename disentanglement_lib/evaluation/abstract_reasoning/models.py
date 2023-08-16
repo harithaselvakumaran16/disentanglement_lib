@@ -157,7 +157,7 @@ class BaselineCNNEmbedder(nn.Module):
 
     flatten = nn.Flatten()
 
-    self.embedding_layer = nn.Sequential(
+    embedding_layers = nn.Sequential(
       conv1,
       relu1,
       conv2,
@@ -167,6 +167,9 @@ class BaselineCNNEmbedder(nn.Module):
       conv4,
       relu4,
       flatten)
+
+  self.embedding_layer = relational_layers.MultiDimBatchApply(embedding_layers)
+
                  
   def call(self, inputs, **kwargs):
     context, answers = inputs
@@ -198,8 +201,11 @@ class HubEmbedding(nn.Module):
       embedder_module = hub.Module(hub_path)
       return embedder_module(dict(images=x), signature="representation")
 
-    self.embedding_layer = self._embedder()
-
+    self.embedding_layer = relational_layers.MultiDimBatchApply([
+            nn.Sequential(
+                nn.Lambda(lambda x: self._embedder(x)),
+            )
+        ])
 def call(self, inputs, **kwargs):
     context, answers = inputs
     context_embedding = self.embedding_layer(context, **kwargs)
