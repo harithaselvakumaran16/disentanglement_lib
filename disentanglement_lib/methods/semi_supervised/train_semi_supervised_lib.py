@@ -21,6 +21,7 @@ from __future__ import print_function
 
 import os
 import time
+import shutil
 
 from disentanglement_lib.data.ground_truth import named_data
 from disentanglement_lib.methods.semi_supervised import semi_supervised_utils  # pylint: disable=unused-import
@@ -28,12 +29,14 @@ from disentanglement_lib.methods.semi_supervised import semi_supervised_vae  # p
 from disentanglement_lib.methods.unsupervised import gaussian_encoder_model
 from disentanglement_lib.utils import results
 import numpy as np
-import tensorflow.compat.v1 as tf
+#import tensorflow.compat.v1 as tf
 
-import gin.tf.external_configurables  # pylint: disable=unused-import
-import gin.tf
-from tensorflow_estimator.python.estimator.tpu import tpu_config
+import gin.torch.external_configurables  # pylint: disable=unused-import
+import gin.torch
+from torch.utils.data import Dataset, DataLoader
+#from tensorflow_estimator.python.estimator.tpu import tpu_config
 from tensorflow_estimator.python.estimator.tpu.tpu_estimator import TPUEstimator
+import torch
 
 
 def train_with_gin(model_dir,
@@ -97,9 +100,9 @@ def train(model_dir,
   del name
 
   # Delete the output directory if necessary.
-  if tf.gfile.IsDirectory(model_dir):
+  if os.path.isdir(model_dir):
     if overwrite:
-      tf.gfile.DeleteRecursively(model_dir)
+      shutil.rmtree(model_dir)
     else:
       raise ValueError("Directory already exists and overwrite is False.")
 
@@ -118,17 +121,32 @@ def train(model_dir,
   # We create a TPUEstimator based on the provided model. This is primarily so
   # that we could switch to TPU training in the future. For now, we train
   # locally on GPUs.
-  run_config = tpu_config.RunConfig(
-      tf_random_seed=model_seed,
-      keep_checkpoint_max=1,
-      tpu_config=tpu_config.TPUConfig(iterations_per_loop=500))
-  tpu_estimator = TPUEstimator(
-      use_tpu=False,
-      model_fn=model.model_fn,
-      model_dir=model_dir,
-      train_batch_size=batch_size,
-      eval_batch_size=batch_size,
-      config=run_config)
+  class CustomRunConfig:
+    def __init__(self, random_seed, checkpoint_max, iterations_per_loop):
+        self.random_seed = random_seed
+        self.checkpoint_max = checkpoint_max
+        self.iterations_per_loop = iterations_per_loop
+
+  class CustomEstimator:
+    def __init__(self, model_fn, model_dir, batch_size, run_config):
+        self.model_fn = model_fn
+        self.model_dir = model_dir
+        self.batch_size = batch_size
+        self.run_config = run_confi
+
+  tpu_config = CustomRunConfig(
+    random_seed=model_seed,
+    checkpoint_max=1,
+    iterations_per_loop=500
+  )
+
+  tpu_estimator = CustomEstimator(
+    model_fn=model.model_fn,  # Replace with your model function
+    model_dir=model_dir,
+    batch_size=batch_size,
+    run_config=tpu_config
+  )
+
 
   # Set up time to keep track of elapsed time in results.
   experiment_timer = time.time()
@@ -141,9 +159,7 @@ def train(model_dir,
   # Save model as a TFHub module.
   output_shape = named_data.get_named_ground_truth_data().observation_shape
   module_export_path = os.path.join(model_dir, "tfhub")
-  gaussian_encoder_model.export_as_tf_hub(model, output_shape,
-                                          tpu_estimator.latest_checkpoint(),
-                                          module_export_path)
+  torch.save(gaussian_encoder_model.state_dict(), module_export_path)
 
   # Save the results. The result dir will contain all the results and config
   # files that we copied along, as we progress in the pipeline. The idea is that
@@ -228,28 +244,41 @@ def semi_supervised_dataset_from_ground_truth_data(ground_truth_data,
   def unsupervised_generator():
     # We need to hard code the random seed for the unsupervised data so that the
     # data set can be reset.
-    unsupervised_random_state = np.random.RandomState(unsupervised_data_seed)
-    while True:
-      yield ground_truth_data.sample_observations(1,
-                                                  unsupervised_random_state)[0]
+    
+    class UnsupervisedGenerator:
+      def __init__(self, ground_truth_data, unsupervised_data_seed):
+        self.ground_truth_data = ground_truth_data
+        self.unsupervised_random_state = np.random.RandomState(unsupervised_data_seed)
+    
+      def __iter__(self):
+        return self
+    
+      def __next__(self):
+        return self.ground_truth_data.sample_observations(1, self.unsupervised_random_state)[0]
 
-  unlabelled_dataset = tf.data.Dataset.from_generator(
-      unsupervised_generator,
-      tf.float32,
-      output_shapes=ground_truth_data.observation_shape)
+    class LabelledDataset(Dataset):
+      def __init__(self, observations, factors):
+        self.observations = observations
+        self.factors = factors
+    
+      def __len__(self):
+        return len(self.observations)
+    
+      def __getitem__(self, idx):
+        return torch.tensor(self.observations[idx], dtype=torch.float32), torch.tensor(self.factors[idx], dtype=torch.float32)
 
-  if validation:
-    (_, _, sampled_observations,
-     sampled_factors) = semi_supervised_utils.train_test_split(
-         sampled_observations, sampled_factors, num_labelled_samples,
-         train_percentage)
-  else:
-    (sampled_observations, sampled_factors, _,
-     _) = semi_supervised_utils.train_test_split(sampled_observations,
-                                                 sampled_factors,
-                                                 num_labelled_samples,
-                                                 train_percentage)
-  labelled_dataset = tf.data.Dataset.from_tensor_slices(
-      (tf.to_float(sampled_observations), tf.to_float(sampled_factors)
-      )).repeat()
-  return tf.data.Dataset.zip((unlabelled_dataset, labelled_dataset))
+    unsupervised_gen = UnsupervisedGenerator(ground_truth_data, unsupervised_data_seed)
+
+    unlabelled_data_loader = DataLoader(unsupervised_gen, batch_size=1)
+
+    if validation:
+      _, _, sampled_observations, sampled_factors = semi_supervised_utils.train_test_split(sampled_observations, sampled_factors, num_labelled_samples, train_percentage)
+    else:
+      sampled_observations, sampled_factors, _, _ = semi_supervised_utils.train_test_split(sampled_observations, sampled_factors, num_labelled_samples, train_percentage)
+
+    labelled_dataset = LabelledDataset(sampled_observations, sampled_factors)
+    labelled_data_loader = DataLoader(labelled_dataset, batch_size=batch_size, shuffle=True)
+
+  # Combine the unlabelled and labelled data loaders
+  combined_data_loader = zip(unlabelled_data_loader, labelled_data_loader)
+  return combined_data_loader
