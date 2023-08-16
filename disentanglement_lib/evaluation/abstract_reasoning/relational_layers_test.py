@@ -21,8 +21,11 @@ from __future__ import print_function
 
 from disentanglement_lib.evaluation.abstract_reasoning import relational_layers
 import numpy as np
-import tensorflow.compat.v1 as tf
-
+#import tensorflow.compat.v1 as tf
+import torch
+import torch.testing as torch_testing
+import torch.nn as nn
+import unittest
 
 def _create_positional_encoding_matrices():
   """Shared input/output pair for the positional encoding tests."""
@@ -33,7 +36,7 @@ def _create_positional_encoding_matrices():
   return input_array, output_array
 
 
-class RelationalLayersTest(tf.test.TestCase):
+class RelationalLayersTest(torch_testing.TestCase):
 
   def test_repeat_for_tensor(self):
     a = np.arange(24).reshape((1, 4, 3, 2))
@@ -45,21 +48,21 @@ class RelationalLayersTest(tf.test.TestCase):
     a = np.array([[[1], [2]]])
     shouldbe = np.array([[[[1, 1], [1, 2]], [[2, 1], [2, 2]]]])
     layer = relational_layers.PairwiseEdgeEmbeddings()
-    result = self.evaluate(layer(tf.constant(a)))
+    result = self.evaluate(layer(torch.tensor(a)))
     self.assertAllClose(shouldbe, result)
 
   def test_relational_layer_for_tensor(self):
     a = np.array([[[1], [2]]])
-    shouldbe = np.array([[[2, 3], [4, 3]]])
+    shouldbe = np.array([[2, 3], [4, 3]]])
     layer = relational_layers.RelationalLayer(
-        tf.keras.layers.Lambda(lambda x: x),
-        tf.keras.layers.Lambda(lambda x: tf.reduce_sum(x, axis=-2)))
-    result = self.evaluate(layer(tf.constant(a)))
+        nn.Lambda(lambda x: x),
+        nn.Lambda(lambda x: torch.sum(x, axis=-2)))
+    result = self.evaluate(layer(torch.tensor(a)))
     self.assertAllClose(shouldbe, result)
 
   def test_positional_encoding_like_for_static_shape_tensor(self):
     value, shouldbe = _create_positional_encoding_matrices()
-    a = tf.constant(value)
+    a = torch.tensor(value)
     output_tensor = relational_layers.positional_encoding_like(a, -3, -2)
     result = self.evaluate(output_tensor)
     self.assertEqual((1, 4, 4, 2), result.shape)
@@ -67,7 +70,7 @@ class RelationalLayersTest(tf.test.TestCase):
 
   def test_positional_encoding_like_for_dynamic_shape_tensor(self):
     value, shouldbe = _create_positional_encoding_matrices()
-    a = tf.placeholder(tf.float32, shape=(None, 4, 3, 2))
+    a = torch.tensor(torch.float32, shape=(None, 4, 3, 2),requires_grad=False))
     output_tensor = relational_layers.positional_encoding_like(a, -3, -2)
     # Check the static shape.
     self.assertEqual([None, 4, 4, 2], output_tensor.get_shape().as_list())
@@ -79,7 +82,7 @@ class RelationalLayersTest(tf.test.TestCase):
   def test_add_positional_encoding_layer_for_tensor(self):
     value, shouldbe_positional = _create_positional_encoding_matrices()
     shouldbe = np.concatenate([value, shouldbe_positional], axis=-2)
-    a = tf.constant(value)
+    a = torch.tensor(value)
     output_tensor = relational_layers.AddPositionalEncoding(-3, -2)(a)
     result = self.evaluate(output_tensor)
     self.assertAllClose(shouldbe, result)
@@ -96,7 +99,7 @@ class RelationalLayersTest(tf.test.TestCase):
     shouldbe = np.stack(results, axis=-2)
     # Compute the solution based on the layer.
     layer = relational_layers.StackAnswers(answer_axis=-1, stack_axis=-2)
-    result = self.evaluate(layer([tf.constant(context), tf.constant(answers)]))
+    result = self.evaluate(layer([torch.tensor(context), torch.tensor(answers)]))
     # Check that they are the same.
     self.assertAllClose(shouldbe, result)
 
@@ -108,12 +111,12 @@ class RelationalLayersTest(tf.test.TestCase):
     shouldbe = np.matmul(input_tensor, kernel)
     # Compute the solution based on the layer.
     layer = relational_layers.MultiDimBatchApply(
-        tf.keras.layers.Lambda(lambda x: tf.matmul(x, tf.constant(kernel))),
+        nn.Lambda(lambda x: torch.matmul(x, torch.tensor(kernel))),
         num_dims_to_keep=1)
-    result = self.evaluate(layer(tf.constant(input_tensor)))
+    result = self.evaluate(layer(torch.tensor(input_tensor)))
     # Check that they are the same.
     self.assertAllClose(shouldbe, result)
 
 
 if __name__ == '__main__':
-  tf.test.main()
+  unittest.main()
