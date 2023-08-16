@@ -55,10 +55,10 @@ def vis_all_interventional_effects(gen_factors, latents, output_dir):
         ax.set_title("Parent={}, IRS = {:1.2}".format(parents[l], scores[l]))
 
   fig.tight_layout()
-  if not tf.gfile.IsDirectory(output_dir):
-    tf.gfile.MakeDirs(output_dir)
+  if not os.path.isdir(output_dir):
+    os.makedirs(output_dir, exist_ok=True)
   output_path = os.path.join(output_dir, "interventional_effect.png")
-  with tf.gfile.Open(output_path, "wb") as path:
+  with open(output_path, "wb") as path:
     fig.savefig(path)
 
 
