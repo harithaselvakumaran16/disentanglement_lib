@@ -29,7 +29,7 @@ from scipy import stats
 from six.moves import range
 #import tensorflow.compat.v1 as tf
 #from tensorflow.compat.v1 import gfile
-import tensorflow_hub as hub
+#import tensorflow_hub as hub
 import gin.torch
 import torch
 
@@ -85,7 +85,9 @@ def visualize(model_dir,
   num_pics = 64
   module_path = os.path.join(model_dir, "tfhub")
 
-  with hub.eval_function_for_module(module_path) as f:
+  with torch.no_grad():
+    f = torch.hub.load(module_path, 'default', source='local')  # Replace with actual model loading method
+
     # Save reconstructions.
     real_pics = dataset.sample_observations(num_pics, random_state)
     raw_pics = f(
