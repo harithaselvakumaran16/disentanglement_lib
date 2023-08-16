@@ -19,6 +19,10 @@ from __future__ import division
 from __future__ import print_function
 from disentanglement_lib.evaluation.abstract_reasoning import relational_layers
 import gin
+import torch.optim as optim
+from torchsummary import summary
+import torch.nn.functional as F
+import torch.nn as nn
 import tensorflow.compat.v1 as tf
 import tensorflow_hub as hub
 from tensorflow.contrib import tpu as contrib_tpu
@@ -49,7 +53,7 @@ class TwoStageModel(object):
     Args:
       embedding_model_class: Either `values`, `onehot`, or a class that has a
         __call__ function that takes as input a two-tuple of
-        (batch_size, num_nodes, heigh, width, num_channels) tensors and returns
+        (batch_size, num_nodes, height, width, num_channels) tensors and returns
         two (batch_size, num_nodes, num_embedding_dims) tensors for both the
         context panels and the answer panels.
       reasoning_model_class: Class that has a __call__ function that takes as
@@ -58,7 +62,7 @@ class TwoStageModel(object):
       optimizer_fn: Function that creates a tf.train optimizer.
     """
     if optimizer_fn is None:
-      optimizer_fn = tf.train.AdamOptimizer
+      optimizer_fn = optim.Adam
     self.optimizer_fn = optimizer_fn
     self.embedding_model_class = embedding_model_class
     self.reasoning_model_class = reasoning_model_class
@@ -66,7 +70,7 @@ class TwoStageModel(object):
   def model_fn(self, features, labels, mode, params):
     """TPUEstimator compatible model_fn."""
     del params
-    is_training = (mode == tf.estimator.ModeKeys.TRAIN)
+    is_training = (mode == "train")
     update_ops = []
 
     # First, embed the context and answer panels.
@@ -94,38 +98,34 @@ class TwoStageModel(object):
     reasoning_model = self.reasoning_model_class()
     logits = reasoning_model([context_embeddings, answer_embeddings],
                              training=is_training)
-    reasoning_model.summary(print_fn=tf.logging.info)
+    #reasoning_model.summary(print_fn=tf.logging.info)
+    summary(reasoning_model, input_size=(num_channels, height, width))
     update_ops += reasoning_model.updates
 
-    loss_vec = tf.nn.sparse_softmax_cross_entropy_with_logits(
-        labels=labels, logits=logits)
-    loss_mean = tf.reduce_mean(loss_vec)
+    loss_vec = F.cross_entropy(logits), labels
+    loss_mean = torch.mean(loss_vec)
 
-    if mode == tf.estimator.ModeKeys.EVAL:
-
+    if mode == "eval":
       def metric_fn(labels, logits):
-        predictions = tf.argmax(logits, 1)
-        return {
-            "accuracy":
-                tf.metrics.accuracy(labels=labels, predictions=predictions),
-        }
+        predictions = torch.argmax(logits, dim= 1)
+        accuracy = (predictions == labels).float().mean()
+        return {"accuracy": accuracy.item()}
 
       return contrib_tpu.TPUEstimatorSpec(
           mode=mode, loss=loss_mean, eval_metrics=(metric_fn, [labels, logits]))
 
-    if mode == tf.estimator.ModeKeys.TRAIN:
-      # In case we use batch norm, the following is required.
-      with tf.control_dependencies(update_ops):
-        optimizer = self.optimizer_fn()
-        train_op = optimizer.minimize(
-            loss=loss_mean, global_step=tf.train.get_global_step())
-      return contrib_tpu.TPUEstimatorSpec(
-          mode=mode, loss=loss_mean, train_op=train_op)
+    if mode == "train":
+      optimizer = self.optimizer_fn()  # Initialize optimizer
+      optimizer.zero_grad()  # Clear gradients
+      loss_mean.backward()  # Backpropagation to compute gradients
+      optimizer.step()  # Update model's parameters
+      return {"loss": loss_mean}
+
     raise NotImplementedError("Unsupported mode.")
 
 
 @gin.configurable
-class BaselineCNNEmbedder(tf.keras.Model):
+class BaselineCNNEmbedder(nn.Module):
   """Baseline implementation where a CNN is learned from scratch."""
 
   def __init__(self,
@@ -137,39 +137,22 @@ class BaselineCNNEmbedder(tf.keras.Model):
     Args:
       num_latent: Integer with the number of latent dimensions.
       name: String with the name of the model.
-      **kwargs: Other keyword arguments passed to tf.keras.Model.
+      **kwargs: Other keyword arguments passed to torch.nn.Module.
     """
     super(BaselineCNNEmbedder, self).__init__(name=name, **kwargs)
-    embedding_layers = [
-        tf.keras.layers.Conv2D(
-            32, (4, 4),
-            2,
-            activation=get_activation(),
-            padding="same",
-            kernel_initializer=get_kernel_initializer()),
-        tf.keras.layers.Conv2D(
-            32, (4, 4),
-            2,
-            activation=get_activation(),
-            padding="same",
-            kernel_initializer=get_kernel_initializer()),
-        tf.keras.layers.Conv2D(
-            64, (4, 4),
-            2,
-            activation=get_activation(),
-            padding="same",
-            kernel_initializer=get_kernel_initializer()),
-        tf.keras.layers.Conv2D(
-            64, (4, 4),
-            2,
-            activation=get_activation(),
-            padding="same",
-            kernel_initializer=get_kernel_initializer()),
-        tf.keras.layers.Flatten(),
-    ]
-    self.embedding_layer = relational_layers.MultiDimBatchApply(
-        tf.keras.models.Sequential(embedding_layers, "embedding_cnn"))
-
+                 self.name=name
+                 self.embedding_layer = nn.Sequential(
+                   nn.Conv2d(3,32,kernel_size=(4,4),stride=2, padding=1),
+                   nn.ReLU(),
+                   nn.Conv2d(32,32,kernel_size=(4,4),stride=2, padding=1),
+                   nn.ReLU(),
+                   nn.Conv2d(32,64,kernel_size=(4,4),stride=2, padding=1),
+                   nn.ReLU(),
+                   nn.Conv2d(64,64,kernel_size=(4,4),stride=2, padding=1),
+                   nn.ReLU(),
+                   nn.Flatten()
+                 )
+                 
   def call(self, inputs, **kwargs):
     context, answers = inputs
     context_embedding = self.embedding_layer(context, **kwargs)
@@ -178,7 +161,7 @@ class BaselineCNNEmbedder(tf.keras.Model):
 
 
 @gin.configurable
-class HubEmbedding(tf.keras.Model):
+class HubEmbedding(nn.Module):
   """Embed images using a pre-trained TFHub model.
 
   Compatible with the representation of a disentanglement_lib model.
