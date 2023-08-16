@@ -17,9 +17,12 @@
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
-import tensorflow.compat.v1 as tf
-import tensorflow_hub as hub
-from tensorflow.contrib import framework as contrib_framework
+#import tensorflow.compat.v1 as tf
+#import tensorflow_hub as hub
+#from tensorflow.contrib import framework as contrib_framework
+import torch
+import torch.nn as nn
+from torch.utils import model_zoo
 
 
 def convolute_and_save(module_path, signature, export_path, transform_fn,
@@ -42,22 +45,23 @@ def convolute_and_save(module_path, signature, export_path, transform_fn,
   if new_signature is None:
     new_signature = signature
 
-  # We create a module_fn that creates the new TFHub module.
+  # We create a module_fn that creates the new TorchHub module.
   def module_fn():
-    module = hub.Module(module_path)
+    module = torch.hub.load(module_path)
     inputs = _placeholders_from_module(module, signature=signature)
     intermediate_tensor = module(inputs, signature=signature, as_dict=True)
     # We need to scope the variables that are created when the transform_fn is
     # applied.
-    with tf.variable_scope("transform"):
-      outputs = transform_fn(**intermediate_tensor)
-    hub.add_signature(name=new_signature, inputs=inputs, outputs=outputs)
+    with torch.no_grad():  # To prevent gradients from being tracked
+        outputs = transform_fn(**intermediate_tensor)
+    return outputs
+
 
   # We create a new graph where we will build the module for export.
-  with tf.Graph().as_default():
+  with torch.no_grad():
     # Create the module_spec for the export.
     spec = hub.create_module_spec(module_fn)
-    m = hub.Module(spec, trainable=True)
+    m = torch.hub.load(spec, trainable=True)
     # We need to recover the scoped variables and remove the scope when loading
     # from the checkpoint.
     prefix = "transform/"
@@ -67,17 +71,11 @@ def convolute_and_save(module_path, signature, export_path, transform_fn,
         if k.startswith(prefix)
     }
     if transform_variables:
-      init_fn = contrib_framework.assign_from_checkpoint_fn(
-          transform_checkpoint_path, transform_variables)
+      state_dict = torch.load(transform_checkpoint_path)
+      filtered_state_dict = {k: v for k, v in state_dict.items() if k in transform_variables}
+      m.load_state_dict(filtered_state_dict)
 
-    with tf.Session() as sess:
-      # Initialize all variables, this also loads the TFHub parameters.
-      sess.run(tf.global_variables_initializer())
-      # Load the transformer variables from the checkpoint.
-      if transform_variables:
-        init_fn(sess)
-      # Export the new TFHub module.
-      m.export(export_path, sess)
+    torch.save(m.state_dict(), export_path)
 
 
 def save_numpy_arrays_to_checkpoint(checkpoint_path, **dict_with_arrays):
@@ -88,34 +86,32 @@ def save_numpy_arrays_to_checkpoint(checkpoint_path, **dict_with_arrays):
     **dict_with_arrays: Dictionary with keys that signify variable names and
       values that are the corresponding Numpy arrays to be saved.
   """
-  with tf.Graph().as_default():
+  with torch.no_grad():
     feed_dict = {}
     assign_ops = []
     nodes_to_save = []
     for array_name, array in dict_with_arrays.items():
       # We will save the numpy array with the corresponding dtype.
-      tf_dtype = tf.as_dtype(array.dtype)
+      torch_dtype = torch.as_dtype(array.dtype)
       # We create a variable which we would like to persist in the checkpoint.
-      node = tf.get_variable(array_name, shape=array.shape, dtype=tf_dtype)
-      nodes_to_save.append(node)
+      tensor = torch.from_numpy(array).to(torch_dtype)
+      tensor_dict[array_name] = tensor
       # We feed the numpy arrays into the graph via placeholder which avoids
       # adding the numpy arrays to the graph as constants.
-      placeholder = tf.placeholder(tf_dtype, shape=array.shape)
+      placeholder = torch.zeros_like(tensor)
+      assign_ops.append((tensor, placeholder))
       feed_dict[placeholder] = array
       # We use the placeholder to assign the variable the intended value.
-      assign_ops.append(tf.assign(node, placeholder))
-    saver = tf.train.Saver(nodes_to_save)
-    with tf.Session() as sess:
-      sess.run(tf.global_variables_initializer())
-      sess.run(assign_ops, feed_dict=feed_dict)
-      saver.save(sess, checkpoint_path)
-  assert saver.last_checkpoints[0] == checkpoint_path
+
+    torch.save(tensor_dict, checkpoint_path)
+    for tensor, placeholder in assign_ops:
+      tensor.copy_(placeholder)
 
 
-def _placeholders_from_module(tfhub_module, signature):
-  """Returns a dictionary with placeholder nodes for a given TFHub module."""
-  info_dict = tfhub_module.get_input_info_dict(signature=signature)
+def _placeholders_from_module(torchhub_module, signature):
+  """Returns a dictionary with placeholder nodes for a given TorchHub module."""
+  info_dict = torchhub_module.get_input_info_dict(signature=signature)
   result = {}
   for key, value in info_dict.items():
-    result[key] = tf.placeholder(value.dtype, shape=value.get_shape(), name=key)
+    result[key] = torch.zeros(value.shape, dtype=torch.dtype(value.dtype), device='cuda', requires_grad=False)
   return result
