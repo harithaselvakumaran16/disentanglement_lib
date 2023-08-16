@@ -22,8 +22,9 @@ potentially random transformations with learned variables are supported.
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
-import tensorflow.compat.v1 as tf
-import gin.tf
+#import tensorflow.compat.v1 as tf
+import gin.torch
+import torch
 
 
 @gin.configurable(
@@ -83,7 +84,8 @@ def sampled_representation(ground_truth_data, gaussian_encoder, random_state,
   del ground_truth_data, gaussian_encoder, random_state, save_path
 
   def transform_fn(mean, logvar):
-    return tf.add(mean,
-                  tf.exp(logvar / 2) * tf.random_normal(tf.shape(mean), 0, 1))
+    std = torch.exp(0.5 * logvar)
+    eps = torch.randn_like(std)
+    return mean + eps * std
 
   return transform_fn, None
