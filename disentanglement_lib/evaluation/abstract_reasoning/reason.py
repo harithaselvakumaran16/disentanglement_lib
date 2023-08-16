@@ -30,9 +30,10 @@ from disentanglement_lib.evaluation.abstract_reasoning import models  # pylint: 
 from disentanglement_lib.evaluation.abstract_reasoning import pgm_data
 from disentanglement_lib.utils import results
 import numpy as np
+import shutil
 import tensorflow.compat.v1 as tf
 import gin.tf.external_configurables  # pylint: disable=unused-import
-import gin.tf
+import gin.torch
 from tensorflow.contrib import tpu as contrib_tpu
 
 
@@ -102,9 +103,9 @@ def reason(
   del name
 
   # Delete the output directory if it already exists.
-  if tf.gfile.IsDirectory(output_dir):
+  if os.path.isdir(output_dir):
     if overwrite:
-      tf.gfile.DeleteRecursively(output_dir)
+      shutil.rmtree(output_dir)
     else:
       raise ValueError("Directory already exists and overwrite is False.")
 
