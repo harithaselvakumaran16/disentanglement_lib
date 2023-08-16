@@ -23,9 +23,7 @@ import torch.optim as optim
 from torchsummary import summary
 import torch.nn.functional as F
 import torch.nn as nn
-import tensorflow.compat.v1 as tf
-import tensorflow_hub as hub
-from tensorflow.contrib import tpu as contrib_tpu
+import torch.nn.init as init
 
 
 @gin.configurable
@@ -171,20 +169,21 @@ class HubEmbedding(nn.Module):
     """Constructs a HubEmbedding.
 
     Args:
-      hub_path: Path to the TFHub module.
+      hub_path: Path to the PytorchHub module.
       name: String with the name of the model.
-      **kwargs: Other keyword arguments passed to tf.keras.Model.
+      **kwargs: Other keyword arguments passed to nn.Module.
     """
     super(HubEmbedding, self).__init__(name=name, **kwargs)
+    self.name=name
 
     def _embedder(x):
+      embedder_module = torch.hub.load(hub_path, 'default', source='local') 
       embedder_module = hub.Module(hub_path)
       return embedder_module(dict(images=x), signature="representation")
 
-    self.embedding_layer = relational_layers.MultiDimBatchApply(
-        tf.keras.layers.Lambda(_embedder))
+    self.embedding_layer = self._embedder()
 
-  def call(self, inputs, **kwargs):
+def call(self, inputs, **kwargs):
     context, answers = inputs
     context_embedding = self.embedding_layer(context, **kwargs)
     answers_embedding = self.embedding_layer(answers, **kwargs)
@@ -192,7 +191,7 @@ class HubEmbedding(nn.Module):
 
 
 @gin.configurable
-class OptimizedWildRelNet(tf.keras.Model):
+class OptimizedWildRelNet(nn.Module):
   """Optimized implementation of the reasoning module in the WildRelNet model.
 
   Based on https://arxiv.org/pdf/1807.04225.pdf.
@@ -217,51 +216,45 @@ class OptimizedWildRelNet(tf.keras.Model):
       **kwargs: Other keyword arguments passed to tf.keras.Model.
     """
     super(OptimizedWildRelNet, self).__init__(name=name, **kwargs)
+    self.name=name
 
     # Create the EdgeMLP.
     edge_layers = []
     for num_units in edge_mlp:
       edge_layers += [
-          tf.keras.layers.Dense(
-              num_units,
-              activation=get_activation(),
-              kernel_initializer=get_kernel_initializer())
+        nn.Linear(num_units, activation=get_activation())
       ]
-    self.edge_layer = tf.keras.models.Sequential(edge_layers, "edge_mlp")
+    self.edge_layer = nn.Sequential(*edge_layers)
 
     # Create the GraphMLP.
     graph_layers = []
     for num_units in graph_mlp:
-      graph_layers += [
-          tf.keras.layers.Dense(
-              num_units,
-              activation=get_activation(),
-              kernel_initializer=get_kernel_initializer())
+      graph_layers += [edge_layers += [
+        nn.Linear(num_units, activation=get_activation())
       ]
+      
     if dropout_in_last_graph_layer:
       graph_layers += [
-          tf.keras.layers.Dropout(
-              1. - dropout_in_last_graph_layer,
-              noise_shape=[1, 1, graph_mlp[-1]])
+        nn.Dropout(1. - dropout_in_last_graph_layer)
       ]
+      
     graph_layers += [
-        tf.keras.layers.Dense(1, kernel_initializer=get_kernel_initializer())
+       nn.Linear(1, kernel_initalizer=get_kernel_initializer())
     ]
 
     # Create the auxiliary layers.
-    self.graph_layer = tf.keras.models.Sequential(graph_layers, "graph_mlp")
+    self.graph_layer = nn.Sequential(*graph_layers)
     self.stacking_layer = relational_layers.StackAnswers()
 
     # Create the WildRelationNet.
-    self.wildrelnet = tf.keras.models.Sequential([
-        relational_layers.AddPositionalEncoding(),
-        relational_layers.RelationalLayer(
-            self.edge_layer,
-            tf.keras.layers.Lambda(lambda x: tf.reduce_sum(x, axis=-2))),
-        tf.keras.layers.Lambda(lambda x: tf.reduce_sum(x, axis=-2)),
-        self.graph_layer,
-        tf.keras.layers.Lambda(lambda x: tf.reduce_sum(x, axis=-1)),
-    ], "wildrelnet")
+    self.wildrelnet = nn.Sequential(
+            relational_layers.AddPositionalEncoding(),
+            relational_layers.RelationalLayer(self.edge_layer, lambda x: torch.sum(x, dim=-2)),
+            lambda x: torch.sum(x, dim=-2),
+            self.graph_layer,
+            lambda x: torch.sum(x, dim=-1)
+        )
+
 
   def call(self, inputs, **kwargs):
     context_embeddings, answer_embeddings = inputs
@@ -274,12 +267,12 @@ class OptimizedWildRelNet(tf.keras.Model):
 
 
 @gin.configurable("activation")
-def get_activation(activation=tf.keras.activations.relu):
-  if activation == "lrelu":
-    return lambda x: tf.keras.activations.relu(x, alpha=0.2)
-  return activation
-
+def get_activation(activation=nn.ReLU(inplace=True)):
+    if activation == "lrelu":
+        return nn.LeakyReLU(0.2, inplace=True)
+    return activation
 
 @gin.configurable("kernel_initializer")
 def get_kernel_initializer(kernel_initializer="lecun_normal"):
-  return kernel_initializer
+    if kernel_initializer == "lecun_normal":
+        return init.normal_
