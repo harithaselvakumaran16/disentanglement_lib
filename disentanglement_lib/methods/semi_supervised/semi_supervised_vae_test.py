@@ -22,10 +22,13 @@ from __future__ import print_function
 from absl.testing import parameterized
 from disentanglement_lib.methods.semi_supervised import semi_supervised_vae  # pylint: disable=unused-import
 import numpy as np
-import tensorflow.compat.v1 as tf
+#import tensorflow.compat.v1 as tf
+import torch
+import torch.testing as torch_testing
+import unittest
 
 
-class S2VaeTest(parameterized.TestCase, tf.test.TestCase):
+class S2VaeTest(parameterized.TestCase, torch_testing.TestCase):
 
   @parameterized.parameters((0, 100., 100.01), (10, 100., 100.01),
                             (100, 100., 100.01), (101, 100., 100.01))
@@ -65,8 +68,8 @@ class S2VaeTest(parameterized.TestCase, tf.test.TestCase):
   # Values for this test are computed with averaging x - x * z +
   # log(1 + exp(-x)).
   def test_xent(self, rep_np, labels_np, target_low, target_high):
-    representation = tf.convert_to_tensor(rep_np, dtype=np.float32)
-    labels = tf.convert_to_tensor(labels_np, dtype=np.float32)
+    representation = torch.tensor(rep_np, dtype=np.float32)
+    labels = torch.tensor(labels_np, dtype=np.float32)
     with self.test_session() as sess:
       test_value = sess.run(
           semi_supervised_vae.supervised_regularizer_xent(
@@ -78,8 +81,8 @@ class S2VaeTest(parameterized.TestCase, tf.test.TestCase):
                             (np.array([[1., 0.], [0., 1.]]),
                              np.array([[0., 1.], [1., 0.]]), 0.125, 0.126))
   def test_cov_det(self, rep_np, labels_np, target_low, target_high):
-    representation = tf.convert_to_tensor(rep_np, dtype=np.float32)
-    labels = tf.convert_to_tensor(labels_np, dtype=np.float32)
+    representation = torch.tensor(rep_np, dtype=np.float32)
+    labels = torch.tensor(labels_np, dtype=np.float32)
     with self.test_session() as sess:
       test_value = sess.run(
           semi_supervised_vae.supervised_regularizer_cov(representation,
@@ -90,7 +93,7 @@ class S2VaeTest(parameterized.TestCase, tf.test.TestCase):
       loc=np.zeros([1, 10]), scale=np.ones([1, 10]), size=[100000, 10]), 0.,
                              0.01))
   def test_cov_rand(self, samples, target_low, target_high):
-    samples = tf.convert_to_tensor(samples, dtype=np.float32)
+    samples = torch.tensor(samples, dtype=np.float32)
     with self.test_session() as sess:
       test_value = sess.run(
           semi_supervised_vae.supervised_regularizer_cov(samples,
@@ -107,8 +110,8 @@ class S2VaeTest(parameterized.TestCase, tf.test.TestCase):
     def _gen_y(x):
       return x + np.random.normal(0., np.sqrt(var), x.shape)
 
-    x_ph = tf.placeholder(tf.float32, [None, 1])
-    y_ph = tf.placeholder(tf.float32, [None, 1])
+    x_ph = torch.nn.Parameter(torch.empty((None, 1), dtype=torch.float32))
+y_ph = torch.nn.Parameter(torch.empty((None, 1), dtype=torch.float32))
     loss, mine_op = semi_supervised_vae.mine(x_ph, y_ph)
     with self.test_session() as sess:
       sess.run(tf.global_variables_initializer())
@@ -121,4 +124,4 @@ class S2VaeTest(parameterized.TestCase, tf.test.TestCase):
 
 
 if __name__ == "__main__":
-  tf.test.main()
+  unittest.main()
