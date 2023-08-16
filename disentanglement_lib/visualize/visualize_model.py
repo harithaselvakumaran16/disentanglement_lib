@@ -19,6 +19,7 @@ from __future__ import division
 from __future__ import print_function
 import numbers
 import os
+import shutil
 from disentanglement_lib.data.ground_truth import named_data
 from disentanglement_lib.utils import results
 from disentanglement_lib.visualize import visualize_util
@@ -26,10 +27,11 @@ from disentanglement_lib.visualize.visualize_irs import vis_all_interventional_e
 import numpy as np
 from scipy import stats
 from six.moves import range
-import tensorflow.compat.v1 as tf
-from tensorflow.compat.v1 import gfile
+#import tensorflow.compat.v1 as tf
+#from tensorflow.compat.v1 import gfile
 import tensorflow_hub as hub
-import gin.tf
+import gin.torch
+import torch
 
 
 def visualize(model_dir,
@@ -54,9 +56,9 @@ def visualize(model_dir,
   random_state = np.random.RandomState(0)
 
   # Create the output directory if necessary.
-  if tf.gfile.IsDirectory(output_dir):
+  if os.path.isdir(output_dir):
     if overwrite:
-      tf.gfile.DeleteRecursively(output_dir)
+      shutil.rmtree(output_dir)
     else:
       raise ValueError("Directory already exists and overwrite is False.")
 
@@ -93,8 +95,8 @@ def visualize(model_dir,
     paired_pics = np.concatenate((real_pics, pics), axis=2)
     paired_pics = [paired_pics[i, :, :, :] for i in range(paired_pics.shape[0])]
     results_dir = os.path.join(output_dir, "reconstructions")
-    if not gfile.IsDirectory(results_dir):
-      gfile.MakeDirs(results_dir)
+    if not os.path.isdir(results_dir):
+      os.makedirs(results_dir)
     visualize_util.grid_save_images(
         paired_pics, os.path.join(results_dir, "reconstructions.jpg"))
 
@@ -110,8 +112,8 @@ def visualize(model_dir,
     random_codes = random_state.normal(0, 1, [num_pics, num_latent])
     pics = activation(_decoder(random_codes))
     results_dir = os.path.join(output_dir, "sampled")
-    if not gfile.IsDirectory(results_dir):
-      gfile.MakeDirs(results_dir)
+    if not os.path.isdir(results_dir):
+      os.makedirs(results_dir)
     visualize_util.grid_save_images(pics,
                                     os.path.join(results_dir, "samples.jpg"))
 
@@ -123,8 +125,8 @@ def visualize(model_dir,
     means = result["mean"]
     logvars = result["logvar"]
     results_dir = os.path.join(output_dir, "traversals")
-    if not gfile.IsDirectory(results_dir):
-      gfile.MakeDirs(results_dir)
+    if not os.path.isdir(results_dir):
+      os.makedirs(results_dir)
     for i in range(means.shape[1]):
       pics = activation(
           latent_traversal_1d_multi_dim(_decoder, means[i, :], None))
@@ -133,8 +135,8 @@ def visualize(model_dir,
 
     # Save the latent traversal animations.
     results_dir = os.path.join(output_dir, "animated_traversals")
-    if not gfile.IsDirectory(results_dir):
-      gfile.MakeDirs(results_dir)
+    if not os.path.isdir(results_dir):
+      os.makedirs(results_dir)
 
     # Cycle through quantiles of a standard Gaussian.
     for i, base_code in enumerate(means[:num_animations]):
