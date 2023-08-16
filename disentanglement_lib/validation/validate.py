@@ -39,10 +39,12 @@ from disentanglement_lib.evaluation.metrics import unsupervised_metrics  # pylin
 from disentanglement_lib.methods.semi_supervised import semi_supervised_utils  # pylint: disable=unused-import
 from disentanglement_lib.utils import results
 import numpy as np
-import tensorflow.compat.v1 as tf
-import tensorflow_hub as hub
+#import tensorflow.compat.v1 as tf
+#import tensorflow_hub as hub
 
-import gin.tf
+import gin.torch
+import torch
+import shutil
 
 
 def validate_with_gin(model_dir,
@@ -99,9 +101,9 @@ def validate(model_dir,
   del name
 
   # Delete the output directory if it already exists.
-  if tf.gfile.IsDirectory(output_dir):
+  if os.path.isdir(output_dir):
     if overwrite:
-      tf.gfile.DeleteRecursively(output_dir)
+      shutil.rmtree(output_dir)
     else:
       raise ValueError("Directory already exists and overwrite is False.")
 
@@ -124,7 +126,8 @@ def validate(model_dir,
       random_seed, dataset, num_labelled_samples)
   # Path to TFHub module of previously trained representation.
   module_path = os.path.join(model_dir, "tfhub")
-  with hub.eval_function_for_module(module_path) as f:
+  with torch.no_grad():
+    f = torch.hub.load(module_path, 'default', source='local')
 
     def _representation_function(x):
       """Computes representation vector for input images."""
