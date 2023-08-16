@@ -28,10 +28,12 @@ import numpy as np
 from six.moves import range
 import tensorflow.compat.v1 as tf
 
-import gin.tf
+import gin.torch
+import torch
+import torch.testing as torch_testing
+import unittest
 
-
-class SemiSupervisedDataTest(parameterized.TestCase, tf.test.TestCase):
+class SemiSupervisedDataTest(parameterized.TestCase, torch_testing.TestCase):
 
   def test_semi_supervised_data(self):
     num_labels = 1000
@@ -55,7 +57,7 @@ class SemiSupervisedDataTest(parameterized.TestCase, tf.test.TestCase):
         self.assertLen(elem[1][1], 10)
 
 
-class LabellerTest(parameterized.TestCase, tf.test.TestCase):
+class LabellerTest(parameterized.TestCase, torch_testing.TestCase):
 
   @parameterized.parameters((np.random.randint(0, 5, size=(100, 10)), 0.))
   def test_perfect_labeller(self, labels, target):
@@ -117,4 +119,4 @@ class LabellerTest(parameterized.TestCase, tf.test.TestCase):
 
 
 if __name__ == "__main__":
-  tf.test.main()
+  unittest.main()
