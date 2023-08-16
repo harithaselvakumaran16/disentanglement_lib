@@ -138,18 +138,35 @@ class BaselineCNNEmbedder(nn.Module):
       **kwargs: Other keyword arguments passed to torch.nn.Module.
     """
     super(BaselineCNNEmbedder, self).__init__(name=name, **kwargs)
-                 self.name=name
-                 self.embedding_layer = nn.Sequential(
-                   nn.Conv2d(3,32,kernel_size=(4,4),stride=2, padding=1),
-                   nn.ReLU(),
-                   nn.Conv2d(32,32,kernel_size=(4,4),stride=2, padding=1),
-                   nn.ReLU(),
-                   nn.Conv2d(32,64,kernel_size=(4,4),stride=2, padding=1),
-                   nn.ReLU(),
-                   nn.Conv2d(64,64,kernel_size=(4,4),stride=2, padding=1),
-                   nn.ReLU(),
-                   nn.Flatten()
-                 )
+    self.name=name
+    conv1 = nn.Conv2d(3, 32, kernel_size=(4, 4), stride=2, padding=1)
+    nn.init.lecun_normal_(conv1.weight)
+    relu1 = nn.ReLU()
+
+    conv2 = nn.Conv2d(32, 32, kernel_size=(4, 4), stride=2, padding=1)
+    nn.init.lecun_normal_(conv2.weight)
+    relu2 = nn.ReLU()
+
+    conv3 = nn.Conv2d(32, 64, kernel_size=(4, 4), stride=2, padding=1)
+    nn.init.lecun_normal_(conv3.weight)
+    relu3 = nn.ReLU()
+
+    conv4 = nn.Conv2d(64, 64, kernel_size=(4, 4), stride=2, padding=1)
+    nn.init.lecun_normal_(conv4.weight)
+    relu4 = nn.ReLU()
+
+    flatten = nn.Flatten()
+
+    self.embedding_layer = nn.Sequential(
+      conv1,
+      relu1,
+      conv2,
+      relu2,
+      conv3,
+      relu3,
+      conv4,
+      relu4,
+      flatten)
                  
   def call(self, inputs, **kwargs):
     context, answers = inputs
@@ -221,17 +238,17 @@ class OptimizedWildRelNet(nn.Module):
     # Create the EdgeMLP.
     edge_layers = []
     for num_units in edge_mlp:
-      edge_layers += [
-        nn.Linear(num_units, activation=get_activation())
-      ]
+      linear_layer = nn.Linear(num_units, activation=get_activation())
+      nn.init.lecun_normal_(linear_layer.weight)
+      edge_layers.append(linear_layer)
     self.edge_layer = nn.Sequential(*edge_layers)
 
     # Create the GraphMLP.
     graph_layers = []
     for num_units in graph_mlp:
-      graph_layers += [edge_layers += [
-        nn.Linear(num_units, activation=get_activation())
-      ]
+      linear_layer = nn.Linear(num_units, activation=get_activation())
+      nn.init.lecun_normal_(linear_layer.weight)
+      graph_layers.append(linear_layer)
       
     if dropout_in_last_graph_layer:
       graph_layers += [
