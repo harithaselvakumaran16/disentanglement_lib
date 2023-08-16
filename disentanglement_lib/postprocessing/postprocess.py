@@ -24,10 +24,12 @@ from disentanglement_lib.postprocessing import methods  # pylint: disable=unused
 from disentanglement_lib.utils import convolute_hub
 from disentanglement_lib.utils import results
 import numpy as np
+import shutil
 import tensorflow.compat.v1 as tf
 import tensorflow_hub as hub
 
-import gin.tf
+import gin.torch
+import torch
 
 
 def postprocess_with_gin(model_dir,
@@ -83,9 +85,9 @@ def postprocess(model_dir,
   del name
 
   # Delete the output directory if it already exists.
-  if tf.gfile.IsDirectory(output_dir):
+  if os.path.isdir(output_dir):
     if overwrite:
-      tf.gfile.DeleteRecursively(output_dir)
+      shutil.rmtree(output_dir)
     else:
       raise ValueError("Directory already exists and overwrite is False.")
 
@@ -106,8 +108,9 @@ def postprocess(model_dir,
 
   # Path to TFHub module of previously trained model.
   module_path = os.path.join(model_dir, "tfhub")
-  with hub.eval_function_for_module(module_path) as f:
-
+  with torch.no_grad():
+    f = torch.hub.load(module_path, 'default', source='local')  # Replace with actual model loading method
+    
     def _gaussian_encoder(x):
       """Encodes images using trained model."""
       # Push images through the TFHub module.
