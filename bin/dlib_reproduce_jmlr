@@ -33,7 +33,8 @@ from disentanglement_lib.utils import aggregate_results
 from disentanglement_lib.visualize import visualize_model
 import numpy as np
 from six.moves import range
-from tensorflow.compat.v1 import gfile
+#from tensorflow.compat.v1 import gfile
+import glob
 
 
 
@@ -126,7 +127,7 @@ def main(unused_argv):
                                      [config], postprocess_bindings)
 
   # Iterate through metrics.
-  metric_configs = sorted(gfile.Glob(FLAGS.gin_evaluation_config_glob))
+  metric_configs = sorted(glob.glob(FLAGS.gin_evaluation_config_glob))
 
   for iternation_num in range(FLAGS.num_eval):
     for config in evaluation_configs:
