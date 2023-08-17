@@ -32,7 +32,8 @@ from disentanglement_lib.utils import results
 from disentanglement_lib.validation import validate
 from disentanglement_lib.visualize import visualize_model
 import numpy as np
-from tensorflow.compat.v1 import gfile
+#from tensorflow.compat.v1 import gfile
+import glob
 
 FLAGS = flags.FLAGS
 
@@ -166,7 +167,7 @@ def main(unused_argv):
     postprocess.postprocess_with_gin(model_dir, post_dir, FLAGS.overwrite,
                                      [config], postprocess_bindings)
   # Iterate through metrics for validation.
-  validation_configs = sorted(gfile.Glob(FLAGS.gin_validation_config_glob))
+  validation_configs = sorted(glob.glob(FLAGS.gin_validation_config_glob))
   for config in evaluation_configs:
 
     post_name = os.path.basename(config).replace(".gin", "")
@@ -198,7 +199,7 @@ def main(unused_argv):
   # Set the random state for the evaluation.
   random_state_eval = np.random.RandomState(FLAGS.eval_seed)
   # Iterate through metrics for test.
-  metric_configs = sorted(gfile.Glob(FLAGS.gin_evaluation_config_glob))
+  metric_configs = sorted(glob.glob(FLAGS.gin_evaluation_config_glob))
   for config in evaluation_configs:
     post_name = os.path.basename(config).replace(".gin", "")
     post_dir = os.path.join(FLAGS.output_directory, "postprocessed",
