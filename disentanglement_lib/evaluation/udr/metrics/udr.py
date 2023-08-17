@@ -30,7 +30,7 @@ import numpy as np
 import scipy
 from sklearn import linear_model
 from sklearn import preprocessing
-import gin.tf
+import gin.torch
 
 
 def relative_strength_disentanglement(corr_matrix):
