@@ -22,7 +22,8 @@ import os
 from absl import app
 from absl import flags
 from disentanglement_lib.evaluation import evaluate
-from tensorflow.compat.v1 import gfile
+#from tensorflow.compat.v1 import gfile
+import glob
 
 FLAGS = flags.FLAGS
 
@@ -44,7 +45,7 @@ def main(unused_argv):
   # gin_evaluation_config_glob flag or a single score via the gin_config and
   # gin_bindings flags.
   if FLAGS.gin_evaluation_config_glob is not None:
-    for gin_eval_config in sorted(gfile.Glob(FLAGS.gin_evaluation_config_glob)):
+    for gin_eval_config in sorted(glob.glob(FLAGS.gin_evaluation_config_glob)):
       metric_name = os.path.basename(gin_eval_config).replace(".gin", "")
       metric_dir = os.path.join(FLAGS.output_dir, metric_name)
       gin_config_files = [gin_eval_config]
