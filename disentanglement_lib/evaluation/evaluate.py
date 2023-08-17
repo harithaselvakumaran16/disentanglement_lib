@@ -41,7 +41,6 @@ from disentanglement_lib.utils import results
 import numpy as np
 #import tensorflow.compat.v1 as tf
 import torch
-import tensorflow_hub as hub
 
 #import gin.tf
 import gin.torch
@@ -121,7 +120,7 @@ def evaluate(model_dir,
 
   # Path to TFHub module of previously trained representation.
   module_path = os.path.join(model_dir, "tfhub")
-  with hub.eval_function_for_module(module_path) as f:
+  with torch.hub.eval_function_for_module(module_path) as f:
 
     def _representation_function(x):
       """Computes representation vector for input images."""
