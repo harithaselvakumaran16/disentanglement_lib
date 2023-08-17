@@ -22,7 +22,7 @@ from absl.testing import parameterized
 from disentanglement_lib.evaluation.udr import evaluate
 from disentanglement_lib.methods.unsupervised import train
 from disentanglement_lib.utils import resources
-import gin.tf
+import gin.torch
 
 
 class EvaluateTest(parameterized.TestCase):
