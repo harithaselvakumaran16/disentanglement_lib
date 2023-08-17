@@ -25,8 +25,8 @@ from disentanglement_lib.utils import convolute_hub
 from disentanglement_lib.utils import results
 import numpy as np
 import shutil
-import tensorflow.compat.v1 as tf
-import tensorflow_hub as hub
+#import tensorflow.compat.v1 as tf
+#import tensorflow_hub as hub
 
 import gin.torch
 import torch
