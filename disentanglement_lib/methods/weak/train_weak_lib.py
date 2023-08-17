@@ -19,6 +19,7 @@ from __future__ import division
 from __future__ import print_function
 
 import os
+import shutil
 import time
 
 from disentanglement_lib.data.ground_truth import named_data
@@ -27,13 +28,14 @@ from disentanglement_lib.methods.weak import weak_vae  # pylint: disable=unused-
 from disentanglement_lib.utils import results
 from disentanglement_lib.visualize import visualize_util
 import numpy as np
-import tensorflow as tf
+#import tensorflow as tf
+import torch
 
-import gin.tf.external_configurables  # pylint: disable=unused-import
-import gin.tf
-from tensorflow_estimator.python.estimator.tpu import tpu_config
-from tensorflow_estimator.python.estimator.tpu.tpu_estimator import TPUEstimator
-
+import gin.torch.external_configurables  # pylint: disable=unused-import
+import gin.torch
+from torch.utils.data import DataLoader, Dataset
+#from tensorflow_estimator.python.estimator.tpu import tpu_config
+#from tensorflow_estimator.python.estimator.tpu.tpu_estimator import TPUEstimator
 
 @gin.configurable("dynamics", blacklist=["z", "ground_truth_data",
                                          "random_state",
@@ -108,9 +110,9 @@ def train(model_dir,
   del name
 
   # Delete the output directory if necessary.
-  if tf.compat.v1.gfile.IsDirectory(model_dir):
+  if os.path.isdir(model_dir):
     if overwrite:
-      tf.compat.v1.gfile.DeleteRecursively(model_dir)
+      shutil.rmtree(model_dir)
     else:
       raise ValueError("Directory already exists and overwrite is False.")
 
@@ -123,11 +125,38 @@ def train(model_dir,
   # We create a TPUEstimator based on the provided model. This is primarily so
   # that we could switch to TPU training in the future. For now, we train
   # locally on GPUs.
+    class CustomRunConfig:
+      def __init__(self, random_seed, checkpoint_max, iterations_per_loop):
+        self.random_seed = random_seed
+        self.checkpoint_max = checkpoint_max
+        self.iterations_per_loop = iterations_per_loop
+
+    class CustomEstimator:
+      def __init__(self, model_fn, model_dir, batch_size, run_config):
+        self.model_fn = model_fn
+        self.model_dir = model_dir
+        self.batch_size = batch_size
+        self.run_config = run_confi
+
+    tpu_config = CustomRunConfig(
+    random_seed=model_seed,
+    checkpoint_max=1,
+    iterations_per_loop=500
+  )
+
+    tpu_estimator = CustomEstimator(
+    model_fn=model.model_fn,  # Replace with your model function
+    model_dir=model_dir,
+    batch_size=batch_size,
+    run_config=tpu_config
+  )
+
+
   run_config = tpu_config.RunConfig(
       tf_random_seed=random_seed,
       keep_checkpoint_max=1,
       tpu_config=tpu_config.TPUConfig(iterations_per_loop=500))
-  tpu_estimator = TPUEstimator(
+  tpu_estimator = tpu_estimator(
       use_tpu=False,
       model_fn=model.model_fn,
       model_dir=model_dir,
@@ -144,9 +173,7 @@ def train(model_dir,
   # Save model as a TFHub module.
   output_shape = named_data.get_named_ground_truth_data().observation_shape
   module_export_path = os.path.join(model_dir, "tfhub")
-  gaussian_encoder_model.export_as_tf_hub(model, output_shape,
-                                          tpu_estimator.latest_checkpoint(),
-                                          module_export_path)
+  torch.jit.save(gaussian_encoder_model, module_export_path)
 
   # Save the results. The result dir will contain all the results and config
   # files that we copied along, as we progress in the pipeline. The idea is that
@@ -174,10 +201,11 @@ def _make_input_fn(ground_truth_data, seed, num_batches=None):
     # tensor shape. This has no effect as our data set is infinite.
     dataset = dataset.batch(batch_size, drop_remainder=True)
     if num_batches is not None:
-      dataset = dataset.take(num_batches)
-    return tf.compat.v1.data.make_one_shot_iterator(dataset).get_next()
-
-  return load_dataset
+    dataset = dataset.take(num_batches)
+    data_loader = DataLoader(dataset, batch_size=1, shuffle=False)
+    data_iter = iter(data_loader)
+    next_item = next(data_iter)
+    return next_item
 
 
 def weak_dataset_from_ground_truth_data(
@@ -219,13 +247,22 @@ def weak_dataset_from_ground_truth_data(
 
   dataset_shape = np.copy(ground_truth_data.observation_shape)
   dataset_shape[0] = dataset_shape[0] * 2
-  weakly_supervised_dataset = \
-      tf.data.Dataset.from_generator(
-          _generator,
-          (tf.float32, tf.int32),
-          output_shapes=(dataset_shape, 1))
+  class WeaklySupervisedDataset(Dataset):
+    def __init__(self, generator, dataset_shape):
+        self.generator = generator
+        self.dataset_shape = dataset_shape
 
-  return weakly_supervised_dataset
+    def __len__(self):
+        # Return the number of samples in the dataset
+        return some_length_value  # Replace with the actual length
+
+    def __getitem__(self, index):
+        # Generate data using the generator
+        data, label = self.generator()
+        return torch.tensor(data, dtype=torch.float32), torch.tensor(label, dtype=torch.int32)
+
+    weakly_supervised_dataset = WeaklySupervisedDataset(generator_function, dataset_shape)
+    return weakly_supervised_dataset
 
 
 def visualize_weakly_supervised_dataset(
@@ -245,8 +282,8 @@ def visualize_weakly_supervised_dataset(
   random_state = np.random.RandomState(0)
 
   # Create output folder if necessary.
-  if not tf.compat.v1.gfile.IsDirectory(path):
-    tf.compat.v1.gfile.MakeDirs(path)
+  if not os.path.isdirs(path):
+    os.makedirs(path)
 
   # Create animations.
   images = []
