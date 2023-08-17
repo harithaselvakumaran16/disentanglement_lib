@@ -20,10 +20,13 @@ from __future__ import print_function
 from absl.testing import parameterized
 from disentanglement_lib.methods.shared import architectures
 import numpy as np
-import tensorflow.compat.v1 as tf
+#import tensorflow.compat.v1 as tf
+import unittest
+import torch
+import torch.testing as torch_testing
 
 
-class ArchitecturesTest(parameterized.TestCase, tf.test.TestCase):
+class ArchitecturesTest(parameterized.TestCase, torch_testing.TestCase):
 
   @parameterized.named_parameters(
       ('fc_encoder', architectures.fc_encoder),
@@ -31,10 +34,10 @@ class ArchitecturesTest(parameterized.TestCase, tf.test.TestCase):
   )
   def test_encoder(self, encoder_f):
     minibatch = np.ones(shape=(10, 64, 64, 1), dtype=np.float32)
-    input_tensor = tf.placeholder(tf.float32, shape=(None, 64, 64, 1))
+    input_tensor = torch.empty((None, 1, 64, 64), dtype=torch.float32)
     latent_mean, latent_logvar = encoder_f(input_tensor, 10)
     with self.test_session() as sess:
-      sess.run(tf.initialize_all_variables())
+      sess.run()
       sess.run(
           [latent_mean, latent_logvar], feed_dict={input_tensor: minibatch})
 
@@ -44,10 +47,10 @@ class ArchitecturesTest(parameterized.TestCase, tf.test.TestCase):
   )
   def test_decoder(self, decoder_f):
     latent_variable = np.ones(shape=(10, 15), dtype=np.float32)
-    input_tensor = tf.placeholder(tf.float32, shape=(None, 15))
+    input_tensor = torch.empty((None, 15), dtype=torch.float32)
     images = decoder_f(input_tensor, [64, 64, 1])
     with self.test_session() as sess:
-      sess.run(tf.initialize_all_variables())
+      sess.run()
       sess.run(images, feed_dict={input_tensor: latent_variable})
 
   @parameterized.named_parameters(
@@ -55,11 +58,11 @@ class ArchitecturesTest(parameterized.TestCase, tf.test.TestCase):
   )
   def test_discriminator(self, discriminator_f):
     images = np.ones(shape=(32, 10), dtype=np.float32)
-    input_tensor = tf.placeholder(tf.float32, shape=(None, 10))
+    input_tensor = torch.empty((None, 10), dtype=torch.float32)
     logits, probs = discriminator_f(input_tensor)
     with self.test_session() as sess:
-      sess.run(tf.initialize_all_variables())
+      sess.run()
       sess.run([logits, probs], feed_dict={input_tensor: images})
 
 if __name__ == '__main__':
-  tf.test.main()
+  unittest.main()
