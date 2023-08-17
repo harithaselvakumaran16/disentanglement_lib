@@ -28,10 +28,11 @@ from disentanglement_lib.methods.shared import losses  # pylint: disable=unused-
 from disentanglement_lib.methods.shared import optimizers  # pylint: disable=unused-import
 from disentanglement_lib.methods.unsupervised import vae
 from six.moves import zip
-import tensorflow.compat.v1 as tf
+#import tensorflow.compat.v1 as tf
 
-import gin.tf
-from tensorflow_estimator.python.estimator.tpu.tpu_estimator import TPUEstimatorSpec
+import gin.torch
+import torch
+#from tensorflow_estimator.python.estimator.tpu.tpu_estimator import TPUEstimatorSpec
 
 
 @gin.configurable("weak_loss", blacklist=["z1", "z2", "labels"])
@@ -61,24 +62,23 @@ class GroupVAEBase(vae.BaseVAE):
 
   def model_fn(self, features, labels, mode, params):
     """TPUEstimator compatible model function."""
-    is_training = (mode == tf.estimator.ModeKeys.TRAIN)
+    is_training = (mode == "train")
     data_shape = features.get_shape().as_list()[1:]
     data_shape[0] = int(data_shape[0] / 2)
     features_1 = features[:, :data_shape[0], :, :]
     features_2 = features[:, data_shape[0]:, :, :]
-    with tf.variable_scope(
-        tf.get_variable_scope(), reuse=tf.AUTO_REUSE):
+    with torch.no_grad():
       z_mean, z_logvar = self.gaussian_encoder(features_1,
                                                is_training=is_training)
       z_mean_2, z_logvar_2 = self.gaussian_encoder(features_2,
                                                    is_training=is_training)
-    labels = tf.squeeze(tf.one_hot(labels, z_mean.get_shape().as_list()[1]))
+    labels = torch.nn.functional.one_hot(labels, num_classes=z_mean.size(1)).squeeze()
     kl_per_point = compute_kl(z_mean, z_mean_2, z_logvar, z_logvar_2)
 
     new_mean = 0.5 * z_mean + 0.5 * z_mean_2
-    var_1 = tf.exp(z_logvar)
-    var_2 = tf.exp(z_logvar_2)
-    new_log_var = tf.math.log(0.5*var_1 + 0.5*var_2)
+    var_1 = torch.exp(z_logvar)
+    var_2 = torch.exp(z_logvar_2)
+    new_log_var = torch.log(0.5*var_1 + 0.5*var_2)
 
     mean_sample_1, log_var_sample_1 = self.aggregate(
         z_mean, z_logvar, new_mean, new_log_var, labels, kl_per_point)
@@ -88,15 +88,15 @@ class GroupVAEBase(vae.BaseVAE):
         mean_sample_1, log_var_sample_1)
     z_sampled_2 = self.sample_from_latent_distribution(
         mean_sample_2, log_var_sample_2)
-    with tf.variable_scope(tf.get_variable_scope(), reuse=tf.AUTO_REUSE):
+    with torch.no_grad():
       reconstructions_1 = self.decode(z_sampled_1, data_shape, is_training)
       reconstructions_2 = self.decode(z_sampled_2, data_shape, is_training)
     per_sample_loss_1 = losses.make_reconstruction_loss(
         features_1, reconstructions_1)
     per_sample_loss_2 = losses.make_reconstruction_loss(
         features_2, reconstructions_2)
-    reconstruction_loss_1 = tf.reduce_mean(per_sample_loss_1)
-    reconstruction_loss_2 = tf.reduce_mean(per_sample_loss_2)
+    reconstruction_loss_1 = torch.mean(per_sample_loss_1)
+    reconstruction_loss_2 = torch.mean(per_sample_loss_2)
     reconstruction_loss = (0.5 * reconstruction_loss_1 +
                            0.5 * reconstruction_loss_2)
     kl_loss_1 = vae.compute_gaussian_kl(mean_sample_1, log_var_sample_1)
@@ -105,31 +105,47 @@ class GroupVAEBase(vae.BaseVAE):
     regularizer = self.regularizer(
         kl_loss, None, None, None)
 
-    loss = tf.add(reconstruction_loss,
+    loss = torch.add(reconstruction_loss,
                   regularizer,
                   name="loss")
-    elbo = tf.add(reconstruction_loss, kl_loss, name="elbo")
-    if mode == tf.estimator.ModeKeys.TRAIN:
+    elbo = torch.add(reconstruction_loss, kl_loss, name="elbo")
+    if mode == "train":
       optimizer = optimizers.make_vae_optimizer()
-      update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+      update_ops = []
       train_op = optimizer.minimize(
-          loss=loss, global_step=tf.train.get_global_step())
-      train_op = tf.group([train_op, update_ops])
-      tf.summary.scalar("reconstruction_loss", reconstruction_loss)
-      tf.summary.scalar("elbo", -elbo)
-      logging_hook = tf.train.LoggingTensorHook({
+          loss=loss, global_step=self.get_global_step())
+      train_op = torch.group([train_op, update_ops])
+      summary_writer = SummaryWriter(log_dir='logs')
+      summary_writer.add_scalar("reconstruction_loss", reconstruction_loss.item(), global_step)
+      summary_writer.add_scalar("elbo", -elbo.item(), global_step)
+
+      class LoggingTensorHook:
+        def __init__(self, tensors_dict, every_n_iter):
+          self.tensors_dict = tensors_dict
+          self.every_n_iter = every_n_iter
+
+        def begin(self):
+          self.step = 0
+
+        def after_run(self, run_context, run_values):
+          self.step += 1
+          if self.step % self.every_n_iter == 0:
+            for name, value in self.tensors_dict.items():
+                print(f"Step {self.step}, {name}: {value.item()}")
+
+      logging_hook = LoggingTensorHook({
           "loss": loss,
           "reconstruction_loss": reconstruction_loss,
           "elbo": -elbo,
       },
                                                 every_n_iter=100)
-      return TPUEstimatorSpec(
+      return (
           mode=mode,
           loss=loss,
           train_op=train_op,
           training_hooks=[logging_hook])
-    elif mode == tf.estimator.ModeKeys.EVAL:
-      return TPUEstimatorSpec(
+    elif mode == "eval":
+      return (
           mode=mode,
           loss=loss,
           eval_metrics=(make_metric_fn("reconstruction_loss", "elbo",
@@ -179,25 +195,25 @@ class MLVae(vae.BaseVAE):
 
   def model_fn(self, features, labels, mode, params):
     """TPUEstimator compatible model function."""
-    is_training = (mode == tf.estimator.ModeKeys.TRAIN)
+    is_training = (mode == "train")
     data_shape = features.get_shape().as_list()[1:]
     data_shape[0] = int(data_shape[0] / 2)
     features_1 = features[:, :data_shape[0], :, :]
     features_2 = features[:, data_shape[0]:, :, :]
-    with tf.variable_scope(tf.get_variable_scope(), reuse=tf.AUTO_REUSE):
+    with torch.no_grad():
       z_mean, z_logvar = self.gaussian_encoder(features_1,
                                                is_training=is_training)
       z_mean_2, z_logvar_2 = self.gaussian_encoder(features_2,
                                                    is_training=is_training)
-    labels = tf.squeeze(tf.one_hot(labels, z_mean.get_shape().as_list()[1]))
+    labels = torch.nn.functional.one_hot(labels, num_classes=z_mean.size(1)).squeeze()
     kl_per_point = compute_kl(z_mean, z_mean_2, z_logvar, z_logvar_2)
 
-    var_1 = tf.exp(z_logvar)
-    var_2 = tf.exp(z_logvar_2)
+    var_1 = torch.exp(z_logvar)
+    var_2 = torch.exp(z_logvar_2)
     new_var = 2*var_1 * var_2 / (var_1 + var_2)
     new_mean = (z_mean/var_1 +z_mean_2/var_2)*new_var*0.5
 
-    new_log_var = tf.math.log(new_var)
+    new_log_var = torch.log(new_var)
 
     mean_sample_1, log_var_sample_1 = self.aggregate(
         z_mean, z_logvar, new_mean, new_log_var, labels, kl_per_point)
@@ -208,16 +224,15 @@ class MLVae(vae.BaseVAE):
         mean_sample_1, log_var_sample_1)
     z_sampled_2 = self.sample_from_latent_distribution(
         mean_sample_2, log_var_sample_2)
-    with tf.variable_scope(
-        tf.get_variable_scope(), reuse=tf.AUTO_REUSE):
+    with torch.no_grad():
       reconstructions_1 = self.decode(z_sampled_1, data_shape, is_training)
       reconstructions_2 = self.decode(z_sampled_2, data_shape, is_training)
     per_sample_loss_1 = losses.make_reconstruction_loss(
         features_1, reconstructions_1)
     per_sample_loss_2 = losses.make_reconstruction_loss(
         features_2, reconstructions_2)
-    reconstruction_loss_1 = tf.reduce_mean(per_sample_loss_1)
-    reconstruction_loss_2 = tf.reduce_mean(per_sample_loss_2)
+    reconstruction_loss_1 = torch.mean(per_sample_loss_1)
+    reconstruction_loss_2 = torch.mean(per_sample_loss_2)
     reconstruction_loss = (0.5 * reconstruction_loss_1 +
                            0.5 * reconstruction_loss_2)
     kl_loss_1 = vae.compute_gaussian_kl(mean_sample_1, log_var_sample_1)
@@ -226,31 +241,46 @@ class MLVae(vae.BaseVAE):
     regularizer = self.regularizer(
         kl_loss, None, None, None)
 
-    loss = tf.add(reconstruction_loss,
+    loss = torch.add(reconstruction_loss,
                   regularizer,
                   name="loss")
-    elbo = tf.add(reconstruction_loss, kl_loss, name="elbo")
-    if mode == tf.estimator.ModeKeys.TRAIN:
+    elbo = torch.add(reconstruction_loss, kl_loss, name="elbo")
+    if mode == "train":
       optimizer = optimizers.make_vae_optimizer()
-      update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+      update_ops = []
       train_op = optimizer.minimize(
-          loss=loss, global_step=tf.train.get_global_step())
-      train_op = tf.group([train_op, update_ops])
-      tf.summary.scalar("reconstruction_loss", reconstruction_loss)
-      tf.summary.scalar("elbo", -elbo)
-      logging_hook = tf.train.LoggingTensorHook({
+          loss=loss, global_step=self.get_global_step())
+      train_op = torch.group([train_op, update_ops])
+      summary_writer = SummaryWriter(log_dir='logs')
+      summary_writer.add_scalar("reconstruction_loss", reconstruction_loss.item(), global_step)
+      summary_writer.add_scalar("elbo", -elbo.item(), global_step)
+
+      class LoggingTensorHook:
+        def __init__(self, tensors_dict, every_n_iter):
+          self.tensors_dict = tensors_dict
+          self.every_n_iter = every_n_iter
+
+        def begin(self):
+        self.step = 0
+
+        def after_run(self, run_context, run_values):
+          self.step += 1
+          if self.step % self.every_n_iter == 0:
+            for name, value in self.tensors_dict.items():
+                print(f"Step {self.step}, {name}: {value.item()}")
+        logging_hook = LoggingTensorHook({
           "loss": loss,
           "reconstruction_loss": reconstruction_loss,
           "elbo": -elbo,
       },
                                                 every_n_iter=100)
-      return TPUEstimatorSpec(
+      return (
           mode=mode,
           loss=loss,
           train_op=train_op,
           training_hooks=[logging_hook])
-    elif mode == tf.estimator.ModeKeys.EVAL:
-      return TPUEstimatorSpec(
+    elif mode == "eval":
+      return (
           mode=mode,
           loss=loss,
           eval_metrics=(make_metric_fn("reconstruction_loss", "elbo",
@@ -303,15 +333,17 @@ def aggregate_labels(z_mean, z_logvar, new_mean, new_log_var, labels,
     Mean and logvariance for the new observation.
   """
   del kl_per_point
-  z_mean_averaged = tf.where(
-      tf.math.equal(labels,
-                    tf.expand_dims(tf.reduce_max(labels, axis=1), 1)),
-      z_mean, new_mean)
-  z_logvar_averaged = tf.where(
-      tf.math.equal(labels,
-                    tf.expand_dims(tf.reduce_max(labels, axis=1), 1)),
-      z_logvar, new_log_var)
+  z_mean_averaged = torch.where(
+    labels == labels.max(dim=1, keepdim=True)[0],
+    z_mean, new_mean
+  )
+  z_logvar_averaged = torch.where(
+    labels == labels.max(dim=1, keepdim=True)[0],
+    z_logvar, new_log_var
+  )
+
   return z_mean_averaged, z_logvar_averaged
+
 
 
 def aggregate_argmax(z_mean, z_logvar, new_mean, new_log_var, labels,
@@ -335,30 +367,32 @@ def aggregate_argmax(z_mean, z_logvar, new_mean, new_log_var, labels,
     Mean and logvariance for the new observation.
   """
   del labels
-  mask = tf.equal(
-      tf.map_fn(discretize_in_bins, kl_per_point, tf.int32),
-      1)
-  z_mean_averaged = tf.where(mask, z_mean, new_mean)
-  z_logvar_averaged = tf.where(mask, z_logvar, new_log_var)
-  return z_mean_averaged, z_logvar_averaged
+  mask = torch.eq(
+    torch.tensor([discretize_in_bins(value) for value in kl_per_point], dtype=torch.int32),
+    1
+  )
+  z_mean_averaged = torch.where(mask, z_mean, new_mean)
+  z_logvar_averaged = torch.where(mask, z_logvar, new_log_var)
 
+  return z_mean_averaged, z_logvar_averaged
 
 def discretize_in_bins(x):
   """Discretize a vector in two bins."""
-  return tf.histogram_fixed_width_bins(
-      x, [tf.reduce_min(x), tf.reduce_max(x)], nbins=2)
+  hist, _ = torch.histc(x, bins=2, range=(x.min(), x.max()))
+
+  return hist
 
 
 def compute_kl(z_1, z_2, logvar_1, logvar_2):
-  var_1 = tf.exp(logvar_1)
-  var_2 = tf.exp(logvar_2)
-  return var_1/var_2 + tf.square(z_2-z_1)/var_2 - 1 + logvar_2 - logvar_1
+  var_1 = torch.exp(logvar_1)
+  var_2 = torch.exp(logvar_2)
+  return var_1/var_2 + torch.square(z_2-z_1)/var_2 - 1 + logvar_2 - logvar_1
 
 
 def make_metric_fn(*names):
   """Utility function to report tf.metrics in model functions."""
 
   def metric_fn(*args):
-    return {name: tf.metrics.mean(vec) for name, vec in zip(names, args)}
+    return {name: torch.mean(vec) for name, vec in zip(names, args)}
 
   return metric_fn
