@@ -29,8 +29,8 @@ from disentanglement_lib.methods.weak import train_weak_lib
 from disentanglement_lib.postprocessing import postprocess
 from disentanglement_lib.visualize import visualize_model
 import numpy as np
-from tensorflow import gfile
-
+#from tensorflow import gfile
+import glob
 
 FLAGS = flags.FLAGS
 
@@ -114,7 +114,7 @@ def main(unused_argv):
   visualize_model.visualize(model_dir, visualize_dir, FLAGS.overwrite)
 
   # We extract the different representations and save them to disk.
-  evaluation_configs = sorted(gfile.Glob(FLAGS.gin_postprocess_config_glob))
+  evaluation_configs = sorted(glob.glob(FLAGS.gin_postprocess_config_glob))
   for config in evaluation_configs:
     post_name = os.path.basename(config).replace(".gin", "")
     logging.info("Extracting representation %s...", post_name)
@@ -127,7 +127,7 @@ def main(unused_argv):
                                      [config], postprocess_bindings)
 
   # Iterate through metrics for test.
-  metric_configs = sorted(gfile.Glob(FLAGS.gin_evaluation_config_glob))
+  metric_configs = sorted(glob.glob(FLAGS.gin_evaluation_config_glob))
 
   for config in evaluation_configs:
     post_name = os.path.basename(config).replace(".gin", "")
