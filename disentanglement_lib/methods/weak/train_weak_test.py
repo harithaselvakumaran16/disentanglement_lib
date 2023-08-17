@@ -23,9 +23,11 @@ from absl.testing import parameterized
 from disentanglement_lib.data.ground_truth import dummy_data
 from disentanglement_lib.methods.weak import train_weak_lib
 from disentanglement_lib.utils import resources
-import tensorflow as tf
+#import tensorflow as tf
 
-import gin.tf
+import gin.torch
+import torch
+import unittest
 
 MODELS_TEST = [
     ["model.model = @group_vae_labels()",
@@ -92,5 +94,5 @@ class WeakDataTest(parameterized.TestCase, tf.test.TestCase):
 
 
 if __name__ == "__main__":
-  tf.compat.v1.disable_eager_execution()
-  tf.test.main()
+    torch.set_grad_enabled(False)
+    unittest.main()
