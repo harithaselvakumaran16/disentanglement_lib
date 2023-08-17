@@ -40,8 +40,8 @@ from disentanglement_lib.methods.unsupervised import train
 from disentanglement_lib.methods.unsupervised import vae
 from disentanglement_lib.postprocessing import postprocess
 from disentanglement_lib.utils import aggregate_results
-import tensorflow.compat.v1 as tf
-import gin.tf
+#import tensorflow.compat.v1 as tf
+import gin.torch
 
 # 0. Settings
 # ------------------------------------------------------------------------------
@@ -92,7 +92,7 @@ class BottleneckVAE(vae.BaseVAE):
     # This is how we customize BaseVAE. To learn more, have a look at the
     # different models in vae.py.
     del z_mean, z_logvar, z_sampled
-    return self.gamma * tf.math.abs(kl_loss - self.target)
+    return self.gamma * torch.abs(kl_loss - self.target)
 
 
 # We use the same training protocol that we defined in model.gin but we use gin
