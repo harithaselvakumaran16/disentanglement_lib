@@ -22,10 +22,12 @@ from __future__ import print_function
 from absl.testing import parameterized
 from disentanglement_lib.methods.weak import weak_vae  # pylint: disable=unused-import
 import numpy as np
-import tensorflow as tf
+#import tensorflow as tf
+import torch
+import torch.testing as torch_testing
+import unittest
 
-
-class WeakVaeTest(parameterized.TestCase, tf.test.TestCase):
+class WeakVaeTest(parameterized.TestCase, torch_testing.TestCase):
 
   @parameterized.parameters(
       (np.zeros([64, 10]),
@@ -58,6 +60,6 @@ class WeakVaeTest(parameterized.TestCase, tf.test.TestCase):
 
 
 if __name__ == "__main__":
-  tf.compat.v1.disable_eager_execution()
-  tf.test.main()
+  torch.set_grad_enabled(False)
+  unittest.main()
 
