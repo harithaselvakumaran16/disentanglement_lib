@@ -31,7 +31,7 @@ from six.moves import zip
 #import tensorflow.compat.v1 as tf
 import gin.torch
 import torch
-from tensorflow.contrib import tpu as contrib_tpu
+#from tensorflow.contrib import tpu as contrib_tpu
 from torch.utils.tensorboard import SummaryWriter
 
 
