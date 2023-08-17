@@ -18,9 +18,9 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 import numpy as np
-import tensorflow.compat.v1 as tf
-import gin.tf
-
+#import tensorflow.compat.v1 as tf
+import gin.torch
+import torch
 
 @gin.configurable("encoder", whitelist=["num_latent", "encoder_fn"])
 def make_gaussian_encoder(input_tensor,
@@ -46,7 +46,7 @@ def make_gaussian_encoder(input_tensor,
   Returns:
     Tuple (means, log_vars) with the encoder means and log variances.
   """
-  with tf.variable_scope("encoder"):
+  with torch.nn.Module("encoder"):
     return encoder_fn(
         input_tensor=input_tensor,
         num_latent=num_latent,
@@ -77,7 +77,7 @@ def make_decoder(latent_tensor,
   Returns:
     Tensor of decoded observations.
   """
-  with tf.variable_scope("decoder"):
+  with torch.nn.Module("decoder"):
     return decoder_fn(
         latent_tensor=latent_tensor,
         output_shape=output_shape,
@@ -105,9 +105,9 @@ def make_discriminator(input_tensor,
   Returns:
     Tuple of (logits, clipped_probs) tensors.
   """
-  with tf.variable_scope("discriminator"):
+  with torch.nn.Module("discriminator"):
     logits, probs = discriminator_fn(input_tensor, is_training=is_training)
-    clipped = tf.clip_by_value(probs, 1e-6, 1 - 1e-6)
+    clipped = torch.clamp(probs, 1e-6, 1 - 1e-6)
   return logits, clipped
 
 
@@ -133,12 +133,13 @@ def fc_encoder(input_tensor, num_latent, is_training=True):
   """
   del is_training
 
-  flattened = tf.layers.flatten(input_tensor)
-  e1 = tf.layers.dense(flattened, 1200, activation=tf.nn.relu, name="e1")
-  e2 = tf.layers.dense(e1, 1200, activation=tf.nn.relu, name="e2")
-  means = tf.layers.dense(e2, num_latent, activation=None)
-  log_var = tf.layers.dense(e2, num_latent, activation=None)
+  flattened = input_tensor.view(input_tensor.size(0), -1)
+  e1 = torch.nn.functional.relu(torch.nn.Linear(flattened.size(1), 1200)(flattened))
+  e2 = torch.nn.functional.relu(torch.nn.Linear(1200, 1200)(e1))
+  means = torch.nn.Linear(1200, num_latent)(e2)
+  log_var = torch.nn.Linear(1200, num_latent)(e2)
   return means, log_var
+
 
 
 @gin.configurable("conv_encoder", whitelist=[])
@@ -163,46 +164,42 @@ def conv_encoder(input_tensor, num_latent, is_training=True):
   """
   del is_training
 
-  e1 = tf.layers.conv2d(
-      inputs=input_tensor,
-      filters=32,
-      kernel_size=4,
-      strides=2,
-      activation=tf.nn.relu,
-      padding="same",
-      name="e1",
-  )
-  e2 = tf.layers.conv2d(
-      inputs=e1,
-      filters=32,
-      kernel_size=4,
-      strides=2,
-      activation=tf.nn.relu,
-      padding="same",
-      name="e2",
-  )
-  e3 = tf.layers.conv2d(
-      inputs=e2,
-      filters=64,
-      kernel_size=2,
-      strides=2,
-      activation=tf.nn.relu,
-      padding="same",
-      name="e3",
-  )
-  e4 = tf.layers.conv2d(
-      inputs=e3,
-      filters=64,
-      kernel_size=2,
-      strides=2,
-      activation=tf.nn.relu,
-      padding="same",
-      name="e4",
-  )
-  flat_e4 = tf.layers.flatten(e4)
-  e5 = tf.layers.dense(flat_e4, 256, activation=tf.nn.relu, name="e5")
-  means = tf.layers.dense(e5, num_latent, activation=None, name="means")
-  log_var = tf.layers.dense(e5, num_latent, activation=None, name="log_var")
+  e1 = torch.nn.functional.relu(torch.nn.Conv2d(
+    in_channels=input_tensor.size(1),
+    out_channels=32,
+    kernel_size=4,
+    stride=2,
+    padding="same"
+  )(input_tensor))
+
+  e2 = torch.nn.functional.relu(torch.nn.Conv2d(
+    in_channels=e1.size(1),
+    out_channels=32,
+    kernel_size=4,
+    stride=2,
+    padding="same"
+  )(e1))
+
+  e3 = torch.nn.functional.relu(torch.nn.Conv2d(
+    in_channels=e2.size(1),
+    out_channels=64,
+    kernel_size=2,
+    stride=2,
+    padding="same"
+  )(e2))
+
+  e4 = torch.nn.functional.relu(torch.nn.Conv2d(
+    in_channels=e3.size(1),
+    out_channels=64,
+    kernel_size=2,
+    stride=2,
+    padding="same"
+  )(e3))
+
+  flat_e4 = e4.view(e4.size(0), -1)
+  e5 = torch.nn.functional.relu(torch.nn.Linear(flat_e4.size(1), 256)(flat_e4))
+  means = torch.nn.Linear(e5.size(1), num_latent)(e5)
+  log_var = torch.nn.Linear(e5.size(1), num_latent)(e5)
   return means, log_var
 
 
@@ -224,11 +221,11 @@ def fc_decoder(latent_tensor, output_shape, is_training=True):
     intensities.
   """
   del is_training
-  d1 = tf.layers.dense(latent_tensor, 1200, activation=tf.nn.tanh)
-  d2 = tf.layers.dense(d1, 1200, activation=tf.nn.tanh)
-  d3 = tf.layers.dense(d2, 1200, activation=tf.nn.tanh)
-  d4 = tf.layers.dense(d3, np.prod(output_shape))
-  return tf.reshape(d4, shape=[-1] + output_shape)
+  d1 = torch.nn.functional.tanh(torch.nn.Linear(latent_tensor.size(1), 1200)(latent_tensor))
+  d2 = torch.nn.functional.tanh(torch.nn.Linear(d1.size(1), 1200)(d1))
+  d3 = torch.nn.functional.tanh(torch.nn.Linear(d2.size(1), 1200)(d2))
+  d4 = torch.nn.Linear(d3.size(1), np.prod(output_shape))(d3)
+  output = d4.view(-1, *output_shape)
 
 
 @gin.configurable("deconv_decoder", whitelist=[])
@@ -249,43 +246,16 @@ def deconv_decoder(latent_tensor, output_shape, is_training=True):
       pixel intensities.
   """
   del is_training
-  d1 = tf.layers.dense(latent_tensor, 256, activation=tf.nn.relu)
-  d2 = tf.layers.dense(d1, 1024, activation=tf.nn.relu)
-  d2_reshaped = tf.reshape(d2, shape=[-1, 4, 4, 64])
-  d3 = tf.layers.conv2d_transpose(
-      inputs=d2_reshaped,
-      filters=64,
-      kernel_size=4,
-      strides=2,
-      activation=tf.nn.relu,
-      padding="same",
-  )
+  d1 = torch.nn.functional.relu(torch.nn.Linear(latent_tensor.size(1), 256)(latent_tensor))
+  d2 = torch.nn.functional.relu(torch.nn.Linear(d1.size(1), 1024)(d1))
+  d2_reshaped = d2.view(-1, 64, 4, 4)
+  d3 = torch.nn.functional.relu(torch.nn.ConvTranspose2d(d2_reshaped.size(1), 64, kernel_size=4, stride=2, padding=1)(d2_reshaped))
+  d4 = torch.nn.functional.relu(torch.nn.ConvTranspose2d(d3.size(1), 32, kernel_size=4, stride=2, padding=1)(d3))
+  d5 = torch.nn.functional.relu(torch.nn.ConvTranspose2d(d4.size(1), 32, kernel_size=4, stride=2, padding=1)(d4))
+  d6 = torch.nn.ConvTranspose2d(d5.size(1), output_shape[2], kernel_size=4, stride=2, padding=1)(d5)
+  output = d6.view(-1, *output_shape)
+  return output
 
-  d4 = tf.layers.conv2d_transpose(
-      inputs=d3,
-      filters=32,
-      kernel_size=4,
-      strides=2,
-      activation=tf.nn.relu,
-      padding="same",
-  )
-
-  d5 = tf.layers.conv2d_transpose(
-      inputs=d4,
-      filters=32,
-      kernel_size=4,
-      strides=2,
-      activation=tf.nn.relu,
-      padding="same",
-  )
-  d6 = tf.layers.conv2d_transpose(
-      inputs=d5,
-      filters=output_shape[2],
-      kernel_size=4,
-      strides=2,
-      padding="same",
-  )
-  return tf.reshape(d6, [-1] + output_shape)
 
 
 @gin.configurable("fc_discriminator", whitelist=[])
@@ -307,16 +277,17 @@ def fc_discriminator(input_tensor, is_training=True):
       discriminator.
   """
   del is_training
-  flattened = tf.layers.flatten(input_tensor)
-  d1 = tf.layers.dense(flattened, 1000, activation=tf.nn.leaky_relu, name="d1")
-  d2 = tf.layers.dense(d1, 1000, activation=tf.nn.leaky_relu, name="d2")
-  d3 = tf.layers.dense(d2, 1000, activation=tf.nn.leaky_relu, name="d3")
-  d4 = tf.layers.dense(d3, 1000, activation=tf.nn.leaky_relu, name="d4")
-  d5 = tf.layers.dense(d4, 1000, activation=tf.nn.leaky_relu, name="d5")
-  d6 = tf.layers.dense(d5, 1000, activation=tf.nn.leaky_relu, name="d6")
-  logits = tf.layers.dense(d6, 2, activation=None, name="logits")
-  probs = tf.nn.softmax(logits)
+  flattened = input_tensor.view(input_tensor.size(0), -1)
+  d1 = torch.nn.functional.leaky_relu(torch.nn.Linear(flattened.size(1), 1000)(flattened))
+  d2 = torch.nn.functional.leaky_relu(torch.nn.Linear(d1.size(1), 1000)(d1))
+  d3 = torch.nn.functional.leaky_relu(torch.nn.Linear(d2.size(1), 1000)(d2))
+  d4 = torch.nn.functional.leaky_relu(torch.nn.Linear(d3.size(1), 1000)(d3))
+  d5 = torch.nn.functional.leaky_relu(torch.nn.Linear(d4.size(1), 1000)(d4))
+  d6 = torch.nn.functional.leaky_relu(torch.nn.Linear(d5.size(1), 1000)(d5))
+  logits = torch.nn.Linear(d6.size(1), 2)(d6)
+  probs = torch.nn.functional.softmax(logits, dim=1)
   return logits, probs
+
 
 
 @gin.configurable("test_encoder", whitelist=["num_latent"])
@@ -336,10 +307,11 @@ def test_encoder(input_tensor, num_latent, is_training):
       variable log variances.
   """
   del is_training
-  flattened = tf.layers.flatten(input_tensor)
-  means = tf.layers.dense(flattened, num_latent, activation=None, name="e1")
-  log_var = tf.layers.dense(flattened, num_latent, activation=None, name="e2")
+  flattened = input_tensor.view(input_tensor.size(0), -1)
+  means = torch.nn.Linear(flattened.size(1), num_latent)(flattened)
+  log_var = torch.nn.Linear(flattened.size(1), num_latent)(flattened)
   return means, log_var
+
 
 
 @gin.configurable("test_decoder", whitelist=[])
@@ -356,5 +328,6 @@ def test_decoder(latent_tensor, output_shape, is_training=False):
       pixel intensities.
   """
   del is_training
-  output = tf.layers.dense(latent_tensor, np.prod(output_shape), name="d1")
-  return tf.reshape(output, shape=[-1] + output_shape)
+  output = torch.nn.Linear(latent_tensor.size(1), np.prod(output_shape))(latent_tensor)
+  output = output.view(-1, *output_shape)
+  return output
