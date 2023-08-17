@@ -17,9 +17,10 @@
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
-import tensorflow.compat.v1 as tf
-import tensorflow_hub as hub
-import gin.tf
+#import tensorflow.compat.v1 as tf
+import torch
+#import tensorflow_hub as hub
+import gin.torch
 
 
 class GaussianEncoderModel(object):
@@ -47,11 +48,7 @@ class GaussianEncoderModel(object):
 
   def sample_from_latent_distribution(self, z_mean, z_logvar):
     """Samples from the Gaussian distribution defined by z_mean and z_logvar."""
-    return tf.add(
-        z_mean,
-        tf.exp(z_logvar / 2) * tf.random_normal(tf.shape(z_mean), 0, 1),
-        name="sampled_latent_variable")
-
+    return z_mean + torch.exp(z_logvar / 2) * torch.randn_like(z_mean)
 
 @gin.configurable("export_as_tf_hub", whitelist=[])
 def export_as_tf_hub(gaussian_encoder_model,
@@ -71,10 +68,9 @@ def export_as_tf_hub(gaussian_encoder_model,
 
   def module_fn(is_training):
     """Module function used for TFHub export."""
-    with tf.variable_scope(tf.get_variable_scope(), reuse=tf.AUTO_REUSE):
+    with torch.no_grad():
       # Add a signature for the Gaussian encoder.
-      image_placeholder = tf.placeholder(
-          dtype=tf.float32, shape=[None] + observation_shape)
+      image_placeholder = torch.placeholder(dtype=torch.float32, size=(None,) + observation_shape)
       mean, logvar = gaussian_encoder_model.gaussian_encoder(
           image_placeholder, is_training)
       hub.add_signature(
@@ -96,8 +92,7 @@ def export_as_tf_hub(gaussian_encoder_model,
           outputs={"images": reconstructed_images})
 
       # Add a signature for the decoder.
-      latent_placeholder = tf.placeholder(
-          dtype=tf.float32, shape=[None, mean.get_shape()[1]])
+      latent_placeholder = torch.placeholder(dtype=torch.float32, size=(None, mean.size(1)))
       decoded_images = gaussian_encoder_model.decode(latent_placeholder,
                                                      observation_shape,
                                                      is_training)
