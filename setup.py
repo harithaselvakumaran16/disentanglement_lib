@@ -63,6 +63,7 @@ setup(
         'tensorflow_hub>=0.2',
         'tensorflow_probability==0.7',
         'seaborn',
+        'torch'
     ],
     extras_require={
         'tf': ['tensorflow==1.14'],
