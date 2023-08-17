@@ -20,10 +20,11 @@ from __future__ import print_function
 from absl.testing import parameterized
 from disentanglement_lib.methods.shared import optimizers
 from six.moves import range
-import tensorflow.compat.v1 as tf
+#import tensorflow.compat.v1 as tf
 
-import gin.tf.external_configurables  # pylint: disable=unused-import
-import gin.tf
+import gin.torch.external_configurables  # pylint: disable=unused-import
+import gin.torch
+import unittest
 
 
 def _make_vae_optimizer_configs():
@@ -74,12 +75,12 @@ class OptimizerTest(parameterized.TestCase, tf.test.TestCase):
     gin.parse_config_files_and_bindings([], gin_bindings)
 
     with self.test_session():
-      x = tf.Variable(0.0)
-      y = tf.pow(x + 2.0, 2.0)
-      global_step = tf.train.get_or_create_global_step()
+      x = torch.tensor(0.0, requires_grad=True)
+      y = torch.pow(x + 2.0, 2.0)
+      global_step = self.get_or_create_global_step()
       optimizer = optimizers.make_vae_optimizer()
       train_op = optimizer.minimize(loss=y, global_step=global_step)
-      tf.global_variables_initializer().run()
+      sess.run()
       for it in range(10):
         self.evaluate(train_op)
         self.assertEqual(it + 1, self.evaluate(global_step))
@@ -90,4 +91,4 @@ class OptimizerTest(parameterized.TestCase, tf.test.TestCase):
 
 
 if __name__ == "__main__":
-  tf.test.main()
+  unittest.main()
