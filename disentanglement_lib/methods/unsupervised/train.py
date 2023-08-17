@@ -25,10 +25,11 @@ from disentanglement_lib.methods.unsupervised import gaussian_encoder_model
 from disentanglement_lib.methods.unsupervised import vae  # pylint: disable=unused-import
 from disentanglement_lib.utils import results
 import numpy as np
-import tensorflow.compat.v1 as tf
-import gin.tf.external_configurables  # pylint: disable=unused-import
-import gin.tf
-from tensorflow.contrib import tpu as contrib_tpu
+#import tensorflow.compat.v1 as tf
+import gin.torch.external_configurables  # pylint: disable=unused-import
+import gin.torch
+import torch
+#from tensorflow.contrib import tpu as contrib_tpu
 
 
 def train_with_gin(model_dir,
@@ -87,9 +88,9 @@ def train(model_dir,
   del name, model_num
 
   # Delete the output directory if it already exists.
-  if tf.gfile.IsDirectory(model_dir):
+  if os.path.isdir(model_dir):
     if overwrite:
-      tf.gfile.DeleteRecursively(model_dir)
+      shutil.rmtree(model_dir)
     else:
       raise ValueError("Directory already exists and overwrite is False.")
 
@@ -103,17 +104,31 @@ def train(model_dir,
   # We create a TPUEstimator based on the provided model. This is primarily so
   # that we could switch to TPU training in the future. For now, we train
   # locally on GPUs.
-  run_config = contrib_tpu.RunConfig(
-      tf_random_seed=random_seed,
-      keep_checkpoint_max=1,
-      tpu_config=contrib_tpu.TPUConfig(iterations_per_loop=500))
-  tpu_estimator = contrib_tpu.TPUEstimator(
-      use_tpu=False,
-      model_fn=model.model_fn,
-      model_dir=os.path.join(model_dir, "tf_checkpoint"),
-      train_batch_size=batch_size,
-      eval_batch_size=batch_size,
-      config=run_config)
+  class CustomRunConfig:
+    def __init__(self, random_seed, checkpoint_max, iterations_per_loop):
+        self.random_seed = random_seed
+        self.checkpoint_max = checkpoint_max
+        self.iterations_per_loop = iterations_per_loop
+
+  class CustomEstimator:
+    def __init__(self, model_fn, model_dir, batch_size, run_config):
+        self.model_fn = model_fn
+        self.model_dir = model_dir
+        self.batch_size = batch_size
+        self.run_config = run_confi
+
+  tpu_config = CustomRunConfig(
+    random_seed=model_seed,
+    checkpoint_max=1,
+    iterations_per_loop=500
+  )
+
+  tpu_estimator = CustomEstimator(
+    model_fn=model.model_fn,  # Replace with your model function
+    model_dir=model_dir,
+    batch_size=batch_size,
+    run_config=tpu_config
+  )
 
   # Set up time to keep track of elapsed time in results.
   experiment_timer = time.time()
@@ -126,9 +141,8 @@ def train(model_dir,
   # Save model as a TFHub module.
   output_shape = named_data.get_named_ground_truth_data().observation_shape
   module_export_path = os.path.join(model_dir, "tfhub")
-  gaussian_encoder_model.export_as_tf_hub(model, output_shape,
-                                          tpu_estimator.latest_checkpoint(),
-                                          module_export_path)
+ 
+  torch.jit.save(gaussian_encoder_model, module_export_path)
 
   # Save the results. The result dir will contain all the results and config
   # files that we copied along, as we progress in the pipeline. The idea is that
